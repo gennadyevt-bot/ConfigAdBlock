@@ -16,10 +16,7 @@ import kotlin.concurrent.thread
 
 class FilterService : VpnService() {
 
-    private fun saveErr(ctx: android.content.Context, msg: String) {
-        ctx.getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", msg).apply()
-    }
-
+    companion object {
         @Volatile var isRunning = false
         private const val CH = "adblock"
         private const val UPSTREAM = "1.1.1.1"
@@ -27,6 +24,10 @@ class FilterService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     @Volatile private var running = false
+
+    private fun saveErr(msg: String) {
+        try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", msg).apply() } catch (_: Exception) {}
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, buildNotification("Фильтр работает"))
@@ -61,44 +62,58 @@ class FilterService : VpnService() {
 
     private fun runFilter() {
         try {
-        val blocked = try { Blocklist.load(this) } catch (e: Exception) { saveErr(this, "список: ${$}{e.message}"); Blocklist.load(this) }
-        val b = Builder()
-            .setSession("Config AdBlock")
-            .addAddress("10.0.0.2", 32)
-            .addDnsServer(UPSTREAM)
-            .addRoute("1.1.1.1", 32)
-            .addRoute("8.8.8.8", 32)
-            .addRoute("9.9.9.9", 32)
-        val localTun: ParcelFileDescriptor? = try { b.establish() } catch (e: Exception) { saveErr(this, "VPN слот: ${$}{e.message}"); null }
-        if (localTun == null) { saveErr(this, "VPN слот недоступен (null)"); return }
-        tun = localTun
-        val input = FileInputStream(localTun.fileDescriptor)
-        val output = FileOutputStream(localTun.fileDescriptor)
-        val upstream = DatagramSocket()
-        protect(upstream)
-        upstream.soTimeout = 8000
-        val buf = ByteArray(4096)
-        val prefs = getSharedPreferences("stats", MODE_PRIVATE)
-        while (running) {
-            val n = try { input.read(buf) } catch (e: Exception) { break }
-            if (n <= 0) continue
-            val pkt = buf.copyOf(n)
-            prefs.edit().putInt("total", prefs.getInt("total", 0) + 1).apply()
-            val dns = extractDnsQuery(pkt) ?: continue
-            if (blocked.matches(dns.domain)) {
-                output.write(wrapUdp(pkt, buildDnsResponse(dns.id, dns.question)))
-                prefs.edit().putInt("blocked", prefs.getInt("blocked", 0) + 1).apply()
-            } else {
-                try {
-                    upstream.send(DatagramPacket(dns.payload, dns.payload.size, InetAddress.getByName(UPSTREAM), 53))
-                    val rp = DatagramPacket(ByteArray(4096), 4096)
-                    upstream.receive(rp)
-                    output.write(wrapUdp(pkt, rp.data.copyOf(rp.length)))
-                    prefs.edit().putInt("allowed", prefs.getInt("allowed", 0) + 1).apply()
-                } catch (e: Exception) { }
+            val blocked = try {
+                Blocklist.load(this)
+            } catch (e: Exception) {
+                saveErr("Ошибка списка: " + (e.message ?: "неизвестно"))
+                Blocklist.load(this)
             }
-        }
+            val b = Builder()
+                .setSession("Config AdBlock")
+                .addAddress("10.0.0.2", 32)
+                .addDnsServer(UPSTREAM)
+                .addRoute("1.1.1.1", 32)
+                .addRoute("8.8.8.8", 32)
+                .addRoute("9.9.9.9", 32)
+            val localTun: ParcelFileDescriptor? = try {
+                b.establish()
+            } catch (e: Exception) {
+                saveErr("VPN слот: " + (e.message ?: "ошибка"))
+                null
+            }
+            if (localTun == null) {
+                saveErr("VPN слот недоступен (занят или нет разрешения)")
+                return
+            }
+            tun = localTun
+            val input = FileInputStream(localTun.fileDescriptor)
+            val output = FileOutputStream(localTun.fileDescriptor)
+            val upstream = DatagramSocket()
+            protect(upstream)
+            upstream.soTimeout = 8000
+            val buf = ByteArray(4096)
+            val prefs = getSharedPreferences("stats", MODE_PRIVATE)
+            while (running) {
+                val n = try { input.read(buf) } catch (e: Exception) { break }
+                if (n <= 0) continue
+                prefs.edit().putInt("total", prefs.getInt("total", 0) + 1).apply()
+                val pkt = buf.copyOf(n)
+                val dns = extractDnsQuery(pkt) ?: continue
+                if (blocked.matches(dns.domain)) {
+                    output.write(wrapUdp(pkt, buildDnsResponse(dns.id, dns.question)))
+                    prefs.edit().putInt("blocked", prefs.getInt("blocked", 0) + 1).apply()
+                } else {
+                    try {
+                        upstream.send(DatagramPacket(dns.payload, dns.payload.size, InetAddress.getByName(UPSTREAM), 53))
+                        val rp = DatagramPacket(ByteArray(4096), 4096)
+                        upstream.receive(rp)
+                        output.write(wrapUdp(pkt, rp.data.copyOf(rp.length)))
+                        prefs.edit().putInt("allowed", prefs.getInt("allowed", 0) + 1).apply()
+                    } catch (e: Exception) { }
+                }
+            }
         } catch (e: Exception) {
+            saveErr("Крах фильтра: " + (e.message ?: "неизвестно"))
         } finally {
             running = false
             isRunning = false
