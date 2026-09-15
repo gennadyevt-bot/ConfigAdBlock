@@ -42,7 +42,7 @@ class FilterService : VpnService() {
             isRunning = true
             thread { runFilter() }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
