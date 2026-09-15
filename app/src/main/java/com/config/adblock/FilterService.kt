@@ -26,7 +26,12 @@ class FilterService : VpnService() {
     @Volatile private var running = false
 
     private fun saveErr(msg: String) {
-        try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", msg).apply() } catch (_: Exception) {}
+        try {
+            val prefs = getSharedPreferences("stats", MODE_PRIVATE)
+            val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            val log = (prefs.getString("log", "") ?: "") + ts + " " + msg + "\n"
+            prefs.edit().putString("log", log.takeLast(1500)).putString("lasterr", msg).apply()
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,6 +67,7 @@ class FilterService : VpnService() {
     private class DnsInfo(val id: Int, val domain: String, val payload: ByteArray, val question: ByteArray)
 
     private fun runFilter() {
+        saveErr("старт")
         try {
             val blocked = try {
                 Blocklist.load(this)
@@ -103,7 +109,7 @@ class FilterService : VpnService() {
                 if (n <= 0) continue
                 prefs.edit().putInt("total", prefs.getInt("total", 0) + 1).apply()
                 val pkt = buf.copyOf(n)
-                val dns = extractDnsQuery(pkt) ?: continue
+                val dns = try { extractDnsQuery(pkt) } catch (e: Exception) { null } ?: continue
                 if (blocked.matches(dns.domain)) {
                     output.write(wrapUdp(pkt, buildDnsResponse(dns.id, dns.question)))
                     prefs.edit().putInt("blocked", prefs.getInt("blocked", 0) + 1).apply()
@@ -118,8 +124,9 @@ class FilterService : VpnService() {
                 }
             }
         } catch (e: Exception) {
-            saveErr("Крах фильтра: " + (e.message ?: "неизвестно"))
+            saveErr("КРАХ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
         } finally {
+            saveErr("стоп")
             running = false
             isRunning = false
             try { tun?.close() } catch (_: Exception) {}
