@@ -4,11 +4,13 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:gravity="center"
+    android:background="@color/green_primary"
     android:padding="32dp">
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Config AdBlock"
+        android:textColor="@color/white_bg"
         android:textSize="28sp"
         android:textStyle="bold"
         android:layout_marginBottom="48dp" />
@@ -18,6 +20,8 @@
         android:layout_height="wrap_content"
         android:text="ВКЛЮЧИТЬ"
         android:textSize="18sp"
+        android:backgroundTint="@color/white_bg"
+        android:textColor="@color/green_primary"
         android:paddingStart="48dp"
         android:paddingEnd="48dp"
         android:paddingTop="16dp"
@@ -27,6 +31,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Заблокировано: 0\nПропущено: 0"
+        android:textColor="@color/white_bg"
         android:textSize="16sp"
         android:layout_marginTop="48dp"
         android:gravity="center" />
