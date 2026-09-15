@@ -79,6 +79,7 @@ class FilterService : VpnService() {
             val n = try { input.read(buf) } catch (e: Exception) { break }
             if (n <= 0) continue
             val pkt = buf.copyOf(n)
+            prefs.edit().putInt("total", prefs.getInt("total", 0) + 1).apply()
             val dns = extractDnsQuery(pkt) ?: continue
             if (blocked.matches(dns.domain)) {
                 output.write(wrapUdp(pkt, buildDnsResponse(dns.id, dns.question)))
