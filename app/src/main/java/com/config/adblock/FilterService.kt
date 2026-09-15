@@ -73,9 +73,7 @@ class FilterService : VpnService() {
                 .setSession("Config AdBlock")
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer(UPSTREAM)
-                .addRoute("1.1.1.1", 32)
-                .addRoute("8.8.8.8", 32)
-                .addRoute("9.9.9.9", 32)
+                .addRoute("0.0.0.0", 0)
             var localTun: ParcelFileDescriptor? = null
             var tries = 0
             while (tries < 3 && localTun == null && running) {
