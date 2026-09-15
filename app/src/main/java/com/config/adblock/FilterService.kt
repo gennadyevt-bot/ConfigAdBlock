@@ -30,7 +30,8 @@ class FilterService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(1, buildNotification("Фильтр работает"))
+        try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
+        try { startForeground(1, buildNotification("Фильтр работает")) } catch (e: Exception) { saveErr("FGS: " + (e.message ?: "?")) }
         if (!isRunning) {
             running = true
             isRunning = true
@@ -75,16 +76,22 @@ class FilterService : VpnService() {
                 .addRoute("1.1.1.1", 32)
                 .addRoute("8.8.8.8", 32)
                 .addRoute("9.9.9.9", 32)
-            val localTun: ParcelFileDescriptor? = try {
-                b.establish()
-            } catch (e: Exception) {
-                saveErr("VPN слот: " + (e.message ?: "ошибка"))
-                null
+            var localTun: ParcelFileDescriptor? = null
+            var tries = 0
+            while (tries < 3 && localTun == null && running) {
+                tries++
+                localTun = try { b.establish() } catch (e: Exception) { saveErr("VPN слот: " + (e.message ?: "ошибка")); null }
+                if (localTun == null) {
+                    saveErr("Слот недоступен. Переспрашиваю разрешение ($tries/3)...")
+                    try {
+                        val pi = VpnService.prepare(this)
+                        if (pi != null) { pi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(pi) }
+                    } catch (e: Exception) { saveErr("Запрос разрешения: " + (e.message ?: "?")) }
+                    try { Thread.sleep(2500) } catch (e: Exception) {}
+                }
             }
-            if (localTun == null) {
-                saveErr("VPN слот недоступен (занят или нет разрешения)")
-                return
-            }
+            if (localTun == null) { saveErr("Слот VPN недоступен после 3 попыток"); return }
+            try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = localTun
             val input = FileInputStream(localTun.fileDescriptor)
             val output = FileOutputStream(localTun.fileDescriptor)
