@@ -1,7 +1,7 @@
 // MITM engine for Config AdBlock.
 // Listens on 127.0.0.1:8080 as forward proxy; decrypts TLS with a per-install CA.
 // Filter logic (blocklist + cosmetic injection) is applied in OnRequest/OnResponse.
-package main
+package mitm
 
 import (
 	"crypto/rand"
@@ -39,7 +39,7 @@ func genCA() (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
 
-func main() {
+func Start() {
 	ca, err := genCA()
 	if err != nil {
 		log.Fatal("CA: ", err)
