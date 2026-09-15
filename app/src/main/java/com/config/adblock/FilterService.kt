@@ -57,6 +57,7 @@ class FilterService : VpnService() {
     private class DnsInfo(val id: Int, val domain: String, val payload: ByteArray, val question: ByteArray)
 
     private fun runFilter() {
+        try {
         val blocked = Blocklist.load(this)
         val b = Builder()
             .setSession("Config AdBlock")
@@ -92,7 +93,13 @@ class FilterService : VpnService() {
                 } catch (e: Exception) { }
             }
         }
-        try { upstream.close() } catch (_: Exception) {}
+        } catch (e: Exception) {
+        } finally {
+            running = false
+            isRunning = false
+            try { tun?.close() } catch (_: Exception) {}
+            try { stopForeground(true) } catch (_: Exception) {}
+        }
     }
 
     private fun extractDnsQuery(pkt: ByteArray): DnsInfo? {
