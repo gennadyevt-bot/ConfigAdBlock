@@ -16,7 +16,10 @@ import kotlin.concurrent.thread
 
 class FilterService : VpnService() {
 
-    companion object {
+    private fun saveErr(ctx: android.content.Context, msg: String) {
+        ctx.getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", msg).apply()
+    }
+
         @Volatile var isRunning = false
         private const val CH = "adblock"
         private const val UPSTREAM = "1.1.1.1"
@@ -58,7 +61,7 @@ class FilterService : VpnService() {
 
     private fun runFilter() {
         try {
-        val blocked = Blocklist.load(this)
+        val blocked = try { Blocklist.load(this) } catch (e: Exception) { saveErr(this, "список: ${$}{e.message}"); Blocklist.load(this) }
         val b = Builder()
             .setSession("Config AdBlock")
             .addAddress("10.0.0.2", 32)
@@ -66,7 +69,8 @@ class FilterService : VpnService() {
             .addRoute("1.1.1.1", 32)
             .addRoute("8.8.8.8", 32)
             .addRoute("9.9.9.9", 32)
-        val localTun: ParcelFileDescriptor = try { b.establish() } catch (e: Exception) { return } ?: return
+        val localTun: ParcelFileDescriptor? = try { b.establish() } catch (e: Exception) { saveErr(this, "VPN слот: ${$}{e.message}"); null }
+        if (localTun == null) { saveErr(this, "VPN слот недоступен (null)"); return }
         tun = localTun
         val input = FileInputStream(localTun.fileDescriptor)
         val output = FileOutputStream(localTun.fileDescriptor)
