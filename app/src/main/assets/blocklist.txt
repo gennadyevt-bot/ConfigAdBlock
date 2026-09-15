@@ -33618,6 +33618,7 @@ nl1.ero-advertising.com
 nl2.ero-advertising.com
 nl4.hit.stat24.com
 nlink.com.br
+nlocalhost.wordtheminer.com
 nltntlfx.165-154-254-148.cpanel.site
 nm.5.p2l.info
 nma-group.net
@@ -47596,6 +47597,7 @@ thirtydaychange.com
 this.content.served.by.addshuffle.com
 this.content.served.by.adshuffle.com
 thisisclicksecured.page.link
+thislocalhost.com
 thisone.online
 thistlegainmere.net
 thistlegainmere.online
