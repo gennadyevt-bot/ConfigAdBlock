@@ -16,8 +16,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: android.content.SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
+    @Volatile private var busy = false
     private val ticker = object : Runnable {
-        override fun run() { updateUi(); handler.postDelayed(this, 1000) }
+        override fun run() { refreshUi(); handler.postDelayed(this, 1000) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,7 +32,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        updateUi()
+        refreshUi()
         handler.post(ticker)
     }
 
@@ -42,25 +43,35 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        busy = false
         if (requestCode == 42 && resultCode == RESULT_OK) {
             startForegroundService(Intent(this, FilterService::class.java))
         }
     }
 
-    private fun updateUi() {
+    private fun refreshUi() {
+        if (busy) return
         val btn = findViewById<MaterialButton>(R.id.btnToggle)
         val stats = findViewById<TextView>(R.id.tvStats)
         val running = FilterService.isRunning
         btn.text = if (running) "ВЫКЛЮЧИТЬ" else "ВКЛЮЧИТЬ"
         stats.text = "Заблокировано: ${prefs.getInt("blocked", 0)}\nПропущено: ${prefs.getInt("allowed", 0)}"
-        btn.setOnClickListener {
-            if (FilterService.isRunning) {
-                stopService(Intent(this, FilterService::class.java))
-            } else {
-                val i = VpnService.prepare(this)
-                if (i != null) startActivityForResult(i, 42)
-                else startForegroundService(Intent(this, FilterService::class.java))
-            }
+        btn.setOnClickListener { onToggle(btn) }
+    }
+
+    private fun onToggle(btn: MaterialButton) {
+        if (busy) return
+        busy = true
+        val wantStart = !FilterService.isRunning
+        btn.text = if (wantStart) "ВКЛЮЧЕНИЕ..." else "ВЫКЛЮЧЕНИЕ..."
+        btn.isEnabled = false
+        if (wantStart) {
+            val i = VpnService.prepare(this)
+            if (i != null) startActivityForResult(i, 42)
+            else startForegroundService(Intent(this, FilterService::class.java))
+        } else {
+            stopService(Intent(this, FilterService::class.java))
         }
+        handler.postDelayed({ busy = false; refreshUi() }, 700)
     }
 }
