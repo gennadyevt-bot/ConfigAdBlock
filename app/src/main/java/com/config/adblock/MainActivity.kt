@@ -63,12 +63,13 @@ class MainActivity : AppCompatActivity() {
             consentNeeded -> "РАЗРЕШИТЬ VPN"
             else -> "ВКЛЮЧИТЬ"
         }
+        val logText = prefs.getString("log", "") ?: ""
         err.text = when {
             running -> "Фильтр работает"
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
-            lasterr.isNotEmpty() -> lasterr
-            else -> ""
+            else -> "Последнее: " + lasterr + "\n\nЖурнал:\n" + logText
         }
+        err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
         btn.setOnClickListener {
             btn.isEnabled = false
