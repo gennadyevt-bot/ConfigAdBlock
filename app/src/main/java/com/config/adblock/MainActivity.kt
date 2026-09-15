@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
         val running = FilterService.isRunning
         btn.text = if (running) "ВЫКЛЮЧИТЬ" else "ВКЛЮЧИТЬ"
         stats.text = "Всего запросов: ${prefs.getInt("total", 0)}\nЗаблокировано: ${prefs.getInt("blocked", 0)}\nПропущено: ${prefs.getInt("allowed", 0)}"
+        findViewById<TextView>(R.id.tvError).text = prefs.getString("lasterr", "") ?: ""
         btn.setOnClickListener {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
