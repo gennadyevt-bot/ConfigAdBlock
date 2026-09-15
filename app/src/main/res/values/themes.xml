@@ -3,14 +3,15 @@
     <style name="Theme.ConfigAdBlock" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/green_primary</item>
         <item name="colorOnPrimary">@color/white_bg</item>
-        <item name="colorPrimaryContainer">@color/green_primary</item>
+        <item name="colorPrimaryContainer">@color/green_dark</item>
         <item name="colorOnPrimaryContainer">@color/white_bg</item>
-        <item name="colorSecondary">@color/green_primary</item>
-        <item name="colorSecondaryContainer">@color/green_primary</item>
+        <item name="colorSecondary">@color/green_dark</item>
+        <item name="colorSecondaryContainer">@color/green_dark</item>
         <item name="colorOnSecondaryContainer">@color/white_bg</item>
         <item name="android:statusBarColor">@color/green_dark</item>
-        <item name="android:navigationBarColor">@color/white_bg</item>
-        <item name="android:windowBackground">@color/white_bg</item>
-        <item name="android:textColorPrimary">@color/text_dark</item>
+        <item name="android:navigationBarColor">@color/green_primary</item>
+        <item name="android:windowBackground">@color/green_primary</item>
+        <item name="android:textColorPrimary">@color/white_bg</item>
+        <item name="android:textColorSecondary">@color/white_bg</item>
     </style>
 </resources>
