@@ -25,7 +25,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         prefs = getSharedPreferences("stats", MODE_PRIVATE)
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
-        findViewById<TextView>(R.id.tvVersion).text = "v$ver"
+        findViewById<TextView>(R.id.tvVersion).text = "v" + ver
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -46,16 +46,30 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 42 && resultCode == RESULT_OK) {
             startForegroundService(Intent(this, FilterService::class.java))
+        } else if (requestCode == 42) {
+            try { prefs.edit().putString("lasterr", "Разрешение VPN не выдано").apply() } catch (_: Exception) {}
         }
     }
 
     private fun updateUi() {
         val btn = findViewById<MaterialButton>(R.id.btnToggle)
         val stats = findViewById<TextView>(R.id.tvStats)
+        val err = findViewById<TextView>(R.id.tvError)
         val running = FilterService.isRunning
-        btn.text = if (running) "ВЫКЛЮЧИТЬ" else "ВКЛЮЧИТЬ"
-        stats.text = "Всего запросов: ${prefs.getInt("total", 0)}\nЗаблокировано: ${prefs.getInt("blocked", 0)}\nПропущено: ${prefs.getInt("allowed", 0)}"
-        findViewById<TextView>(R.id.tvError).text = prefs.getString("lasterr", "") ?: ""
+        val consentNeeded = try { VpnService.prepare(this) != null } catch (e: Exception) { false }
+        val lasterr = prefs.getString("lasterr", "") ?: ""
+        btn.text = when {
+            running -> "ВЫКЛЮЧИТЬ"
+            consentNeeded -> "РАЗРЕШИТЬ VPN"
+            else -> "ВКЛЮЧИТЬ"
+        }
+        err.text = when {
+            running -> "Фильтр работает"
+            consentNeeded -> "Нужно разрешение системы — жми кнопку"
+            lasterr.isNotEmpty() -> lasterr
+            else -> ""
+        }
+        stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
         btn.setOnClickListener {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
