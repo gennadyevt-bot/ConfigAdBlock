@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:padding="32dp">
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Config AdBlock"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="48dp" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnToggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ВКЛЮЧИТЬ"
+        android:textSize="18sp"
+        android:paddingStart="48dp"
+        android:paddingEnd="48dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp" />
+    <TextView
+        android:id="@+id/tvStats"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Заблокировано: 0\nПропущено: 0"
+        android:textSize="16sp"
+        android:layout_marginTop="48dp"
+        android:gravity="center" />
+</LinearLayout>
