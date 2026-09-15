@@ -29,3 +29,23 @@ jobs:
       with:
         go-version: '1.22'
     - run: cd mitm && go mod tidy && go build ./...
+  go-aar:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+    - name: Install NDK
+      run: |
+        echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "ndk;26.1.10909125" || echo "y" | sdkmanager "ndk;26.1.10909125"
+    - name: gomobile bind
+      run: |
+        export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        gomobile init
+        cd mitm && gomobile bind -target android -androidapi 26 -o mitm.aar .
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mitm-aar
+        path: mitm/mitm.aar
