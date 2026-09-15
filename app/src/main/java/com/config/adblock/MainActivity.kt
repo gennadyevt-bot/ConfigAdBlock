@@ -16,15 +16,16 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: android.content.SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
-    @Volatile private var busy = false
     private val ticker = object : Runnable {
-        override fun run() { refreshUi(); handler.postDelayed(this, 1000) }
+        override fun run() { updateUi(); handler.postDelayed(this, 1000) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         prefs = getSharedPreferences("stats", MODE_PRIVATE)
+        val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
+        findViewById<TextView>(R.id.tvVersion).text = "v$ver"
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -32,7 +33,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshUi()
+        updateUi()
         handler.post(ticker)
     }
 
@@ -43,35 +44,31 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        busy = false
         if (requestCode == 42 && resultCode == RESULT_OK) {
             startForegroundService(Intent(this, FilterService::class.java))
         }
     }
 
-    private fun refreshUi() {
-        if (busy) return
+    private fun updateUi() {
         val btn = findViewById<MaterialButton>(R.id.btnToggle)
         val stats = findViewById<TextView>(R.id.tvStats)
         val running = FilterService.isRunning
         btn.text = if (running) "ВЫКЛЮЧИТЬ" else "ВКЛЮЧИТЬ"
-        stats.text = "Заблокировано: ${prefs.getInt("blocked", 0)}\nПропущено: ${prefs.getInt("allowed", 0)}"
-        btn.setOnClickListener { onToggle(btn) }
-    }
-
-    private fun onToggle(btn: MaterialButton) {
-        if (busy) return
-        busy = true
-        val wantStart = !FilterService.isRunning
-        btn.text = if (wantStart) "ВКЛЮЧЕНИЕ..." else "ВЫКЛЮЧЕНИЕ..."
-        btn.isEnabled = false
-        if (wantStart) {
-            val i = VpnService.prepare(this)
-            if (i != null) startActivityForResult(i, 42)
-            else startForegroundService(Intent(this, FilterService::class.java))
-        } else {
-            stopService(Intent(this, FilterService::class.java))
+        stats.text = "Всего запросов: ${prefs.getInt("total", 0)}\nЗаблокировано: ${prefs.getInt("blocked", 0)}\nПропущено: ${prefs.getInt("allowed", 0)}"
+        btn.setOnClickListener {
+            btn.isEnabled = false
+            btn.postDelayed({ btn.isEnabled = true }, 800)
+            if (FilterService.isRunning) {
+                stopService(Intent(this, FilterService::class.java))
+                btn.postDelayed({ updateUi() }, 300)
+            } else {
+                val i = VpnService.prepare(this)
+                if (i != null) startActivityForResult(i, 42)
+                else {
+                    startForegroundService(Intent(this, FilterService::class.java))
+                    btn.postDelayed({ updateUi() }, 500)
+                }
+            }
         }
-        handler.postDelayed({ busy = false; refreshUi() }, 700)
     }
 }
