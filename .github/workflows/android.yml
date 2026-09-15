@@ -21,3 +21,11 @@ jobs:
       with:
         name: adblock-debug-apk
         path: app/build/outputs/apk/debug/app-debug.apk
+  go-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+    - run: cd mitm && go build ./...
