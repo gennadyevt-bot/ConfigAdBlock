@@ -143,7 +143,12 @@ class MainActivity : AppCompatActivity() {
         }
         val logText = prefs.getString("log", "") ?: ""
         err.text = when {
-            running -> if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
+            running -> {
+                val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
+                if (prefs.getBoolean("https_mode", false)) {
+                    base + "\nпрокси: TCP " + mitm.Mitm.tcpCount() + " / DNS " + mitm.Mitm.udpCount() + " / direct " + mitm.Mitm.directCount()
+                } else base
+            }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
             else -> "Последнее: " + lasterr + "\n\nЖурнал:\n" + logText
         }
