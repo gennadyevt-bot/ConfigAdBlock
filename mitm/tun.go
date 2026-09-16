@@ -17,11 +17,12 @@ func StartTunnel(fd int, mtu int) error {
 		MTU:      mtu,
 		LogLevel: "error",
 	})
-	return engine.Start()
+	engine.Start()
+	return nil
 }
 
 // StopTunnel останавливает сетевой стек (закрывает fd — Android
 // освободит TUN).
-func StopTunnel() error {
-	return engine.Stop()
+func StopTunnel() {
+	engine.Stop()
 }
