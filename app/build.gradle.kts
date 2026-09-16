@@ -9,8 +9,19 @@ android {
         versionCode = 16
         versionName = "0.5.0"
     }
+    signingConfigs {
+        create("release") {
+            storeFile = file("cab.jks")
+            storePassword = "cabpass123"
+            keyAlias = "cab"
+            keyPassword = "cabpass123"
+        }
+    }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
         debug { applicationIdSuffix = ".debug" }
     }
     compileOptions {
