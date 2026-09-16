@@ -202,6 +202,17 @@ class FilterService : VpnService() {
             while (running) {
                 try {
                     Thread.sleep(2000)
+                    // система могла сорвать VPN-сессию (always-on другого
+                    // приложения, смена сети) — замечаем и честно стопаемся
+                    try {
+                        val pi = VpnService.prepare(this)
+                        if (pi != null) {
+                            saveErr("VPN-СЕССИЯ ПОТЕРЯНА СИСТЕМОЙ (слот отдали другому приложению?)")
+                            getSharedPreferences("stats", MODE_PRIVATE).edit().putString("vpn_alive", "потерян").apply()
+                            break
+                        }
+                        getSharedPreferences("stats", MODE_PRIVATE).edit().putString("vpn_alive", "жив").apply()
+                    } catch (_: Exception) {}
                     getSharedPreferences("stats", MODE_PRIVATE).edit()
                         .putLong("tcp_try", mitm.Mitm.tcpTry())
                         .putLong("tcp_ok", mitm.Mitm.tcpCount())
