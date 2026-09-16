@@ -3,6 +3,8 @@ package mitm
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
