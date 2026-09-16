@@ -2,9 +2,12 @@ package mitm
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +70,7 @@ type tunHandler struct{}
 
 func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	defer conn.Close()
+	atomic.AddInt64(&tcpTry, 1)
 	id := conn.ID()
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
@@ -111,10 +115,43 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	relay(conn, g)
 }
 
-// DNS: каждый UDP-поток на порт 53 — один запрос-ответ с апстримом.
+// DNS через DNS-over-HTTPS: операторы РФ перехватывают/глушет plain
+// UDP 53, поэтому апстрим — только по 443 в обход перехвата.
+var dohClient = &http.Client{Timeout: 6 * time.Second}
+
+var dohEndpoints = []string{
+	"https://1.1.1.1/dns-query",
+	"https://1.0.0.1/dns-query",
+	"https://dns.google/dns-query",
+}
+
+func resolveDoH(query []byte) ([]byte, error) {
+	for _, url := range dohEndpoints {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(query))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/dns-message")
+		req.Header.Set("Accept", "application/dns-message")
+		resp, err := dohClient.Do(req)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 || len(body) < 12 {
+			continue
+		}
+		return body, nil
+	}
+	return nil, errors.New("DoH: все апстримы недоступны")
+}
+
+// DNS: каждый UDP-поток на порт 53 — один запрос-ответ.
 func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	defer conn.Close()
 	id := conn.ID()
+	atomic.AddInt64(&udpTry, 1)
 	if id.LocalPort != 53 {
 		return
 	}
@@ -124,20 +161,10 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	if err != nil || n <= 0 {
 		return
 	}
-	rconn, err := net.DialTimeout("udp", "8.8.8.8:53", 5*time.Second)
-	if err != nil {
-		return
-	}
-	defer rconn.Close()
-	_ = rconn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := rconn.Write(buf[:n]); err != nil {
-		return
-	}
-	rbuf := make([]byte, 4096)
-	rn, err := rconn.Read(rbuf)
+	ans, err := resolveDoH(buf[:n])
 	if err != nil {
 		return
 	}
 	atomic.AddInt64(&udpCount, 1)
-	_, _ = conn.Write(rbuf[:rn])
+	_, _ = conn.Write(ans)
 }
