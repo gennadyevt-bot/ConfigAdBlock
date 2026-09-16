@@ -150,8 +150,14 @@ class FilterService : VpnService() {
                     blFile.writeText(r.readText())
                 }
             } catch (e: Exception) { saveErr("Списка нет: " + (e.message ?: "?")) }
-            try { mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath) }
-            catch (e: Exception) { saveErr("Прокси: " + (e.message ?: "?")) }
+            try {
+                mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "прокси: OK").apply()
+            } catch (e: Exception) {
+                saveErr("ПРОКСИ НЕ ЗАПУСТИЛСЯ: " + (e.message ?: "?"))
+                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "ПРОКСИ: " + (e.message ?: "?")).apply()
+                return
+            }
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
             val b = Builder()
