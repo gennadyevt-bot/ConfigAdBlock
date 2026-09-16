@@ -24,6 +24,7 @@ class FilterService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     @Volatile private var running = false
+    @Volatile private var httpsMode = false
 
     private fun saveErr(msg: String) {
         try {
@@ -35,12 +36,13 @@ class FilterService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        httpsMode = intent?.getBooleanExtra("https", false) == true
         try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
-        try { startForeground(1, buildNotification("Фильтр работает")) } catch (e: Exception) { saveErr("FGS: " + (e.message ?: "?")) }
+        try { startForeground(1, buildNotification(if (httpsMode) "Фильтр работает (HTTPS)" else "Фильтр работает")) } catch (e: Exception) { saveErr("FGS: " + (e.message ?: "?")) }
         if (!isRunning) {
             running = true
             isRunning = true
-            thread { runFilter() }
+            thread { if (httpsMode) runHttpsFilter() else runFilter() }
         }
         return START_NOT_STICKY
     }
@@ -48,6 +50,8 @@ class FilterService : VpnService() {
     override fun onDestroy() {
         running = false
         isRunning = false
+        try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
+        try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
         try { tun?.close() } catch (_: Exception) {}
         super.onDestroy()
         android.os.Process.killProcess(android.os.Process.myPid())
@@ -63,6 +67,55 @@ class FilterService : VpnService() {
             .setContentText(text)
             .setContentIntent(pi)
             .build()
+    }
+
+    // Режим HTTPS: full-tunnel -> Go-движок (MITM-прокси 127.0.0.1:8080).
+    // Наше приложение исключено из маршрутов, чтобы прокси не ходил в свою
+    // же туннель. DNS остаётся на мобильной сети (системный резолвер).
+    private fun runHttpsFilter() {
+        saveErr("старт HTTPS")
+        var pfd: ParcelFileDescriptor? = null
+        try {
+            try { mitm.Mitm.startProxy(filesDir.absolutePath) }
+            catch (e: Exception) { saveErr("Прокси: " + (e.message ?: "?")) }
+            val b = Builder()
+                .setSession("Config AdBlock HTTPS")
+                .addAddress("10.0.0.2", 32)
+                .addRoute("0.0.0.0", 0)
+                .addDisallowedApplication(packageName)
+            var tries = 0
+            while (tries < 3 && pfd == null && running) {
+                tries++
+                pfd = try { b.establish() } catch (e: Exception) { saveErr("VPN слот: " + (e.message ?: "ошибка")); null }
+                if (pfd == null) {
+                    saveErr("Слот недоступен. Переспрашиваю разрешение ($tries/3)...")
+                    try {
+                        val pi = VpnService.prepare(this)
+                        if (pi != null) { pi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(pi) }
+                    } catch (e: Exception) { saveErr("Запрос разрешения: " + (e.message ?: "?")) }
+                    try { Thread.sleep(2500) } catch (e: Exception) {}
+                }
+            }
+            if (pfd == null) { saveErr("Слот VPN недоступен после 3 попыток"); return }
+            try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
+            tun = pfd
+            val fd = pfd.detachFd()
+            try { mitm.Mitm.startTunnel(fd.toLong(), 8500) }
+            catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
+            saveErr("туннель поднят, движок работает")
+            while (running) {
+                try { Thread.sleep(1000) } catch (e: Exception) { break }
+            }
+        } catch (e: Exception) {
+            saveErr("КРАХ HTTPS: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+        } finally {
+            saveErr("стоп HTTPS")
+            running = false
+            isRunning = false
+            try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
+            try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
+            try { stopForeground(true) } catch (_: Exception) {}
+        }
     }
 
     private class DnsInfo(val id: Int, val domain: String, val payload: ByteArray, val question: ByteArray)
