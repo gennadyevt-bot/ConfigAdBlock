@@ -53,11 +53,16 @@ class FilterService : VpnService() {
         return START_NOT_STICKY
     }
 
+    // Остановка: движок гасим в фоновом потоке (engine.Stop() может
+    // подвиснуть, а onDestroy идёт по главному), killProcess гарантирует,
+    // что ядро закроет detached fd и Android освободит VPN-слот.
     override fun onDestroy() {
         running = false
         isRunning = false
-        try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
-        try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
+        thread {
+            try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
+            try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
+        }
         try { tun?.close() } catch (_: Exception) {}
         super.onDestroy()
         android.os.Process.killProcess(android.os.Process.myPid())
