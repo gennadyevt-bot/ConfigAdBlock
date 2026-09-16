@@ -48,6 +48,12 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, if (isChecked) "Отладка: 443 напрямую, без MITM" else "MITM включён", Toast.LENGTH_LONG).show()
         }
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
+        val chkEmpty = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkEmpty)
+        chkEmpty.isChecked = prefs.getBoolean("empty_vpn", false)
+        chkEmpty.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("empty_vpn", isChecked).apply()
+            Toast.makeText(this, if (isChecked) "Пустой туннель: только VPN, без движка (диагностика)" else "Обычный режим", Toast.LENGTH_LONG).show()
+        }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
