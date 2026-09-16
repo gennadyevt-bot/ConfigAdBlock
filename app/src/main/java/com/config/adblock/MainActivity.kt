@@ -153,10 +153,11 @@ class MainActivity : AppCompatActivity() {
         val st = prefs.getString("selftest", "") ?: ""
         val pst = prefs.getString("proxy_state", "") ?: ""
         val fl = prefs.getString("flowlog", "") ?: ""
+        val vpna = prefs.getString("vpn_alive", "") ?: ""
         err.text = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
-                if (prefs.getBoolean("https_mode", false)) base + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
+                if (prefs.getBoolean("https_mode", false)) base + (if (vpna.isNotEmpty()) " (" + vpna + ")" else "") + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
                 else base
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
