@@ -156,6 +156,7 @@ class FilterService : VpnService() {
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDisallowedApplication(packageName)
+            applyExclusions(b)
             var tries = 0
             while (tries < 3 && pfd == null && running) {
                 tries++
@@ -191,6 +192,16 @@ class FilterService : VpnService() {
         }
     }
 
+    // Исключённые пользователем приложения (pinning) обходят VPN целиком
+    private fun applyExclusions(b: Builder) {
+        try {
+            val ex = getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()
+            for (p in ex) {
+                try { b.addDisallowedApplication(p) } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
+
     private class DnsInfo(val id: Int, val domain: String, val payload: ByteArray, val question: ByteArray)
 
     private fun runFilter() {
@@ -209,6 +220,7 @@ class FilterService : VpnService() {
                 .addRoute("1.1.1.1", 32)
                 .addRoute("8.8.8.8", 32)
                 .addRoute("9.9.9.9", 32)
+            applyExclusions(b)
             var localTun: ParcelFileDescriptor? = null
             var tries = 0
             while (tries < 3 && localTun == null && running) {
