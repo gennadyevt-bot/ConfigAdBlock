@@ -42,14 +42,34 @@ class FilterService : VpnService() {
         } catch (_: Exception) {}
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        saveErr("SVC onCreate")
+    }
+
+    override fun onRevoke() {
+        saveErr("SVC onRevoke!!! (система отозвала VPN)")
+        running = false
+        isRunning = false
+        super.onRevoke()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        saveErr("SVC onTaskRemoved")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         httpsMode = intent?.getBooleanExtra("https", false) == true
+        val emptyMode = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("empty_vpn", false) } catch (_: Exception) { false }
+        saveErr("SVC onStartCommand https=" + httpsMode + " empty=" + emptyMode)
+        try { saveErr("alwaysOn=" + isAlwaysOn + " lockdown=" + isLockdownEnabled) } catch (_: Exception) {}
         try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
         try { startForeground(1, buildNotification(if (httpsMode) "Фильтр работает (HTTPS)" else "Фильтр работает")) } catch (e: Exception) { saveErr("FGS: " + (e.message ?: "?")) }
         if (!isRunning) {
             running = true
             isRunning = true
-            thread { if (httpsMode) runHttpsFilter() else runFilter() }
+            thread { if (emptyMode) runEmptyVpn() else if (httpsMode) runHttpsFilter() else runFilter() }
         }
         return START_NOT_STICKY
     }
@@ -58,6 +78,7 @@ class FilterService : VpnService() {
     // подвиснуть, а onDestroy идёт по главному), killProcess гарантирует,
     // что ядро закроет detached fd и Android освободит VPN-слот.
     override fun onDestroy() {
+        saveErr("SVC onDestroy")
         running = false
         isRunning = false
         thread {
@@ -135,6 +156,36 @@ class FilterService : VpnService() {
                 saveErr("CA восстановлен из Загрузок")
             }
         } catch (e: Exception) { saveErr("CA persist: " + (e.message ?: "?")) }
+    }
+
+    // ПУСТОЙ ТУННЕЛЬ (диагностика GPT): только establish() и держим fd
+    // открытым. Никакого Go. Если системный VPN-ключ исчезает и тут —
+    // проблема в Android/service lifecycle, а не в движке.
+    private fun runEmptyVpn() {
+        saveErr("ПУСТОЙ: старт")
+        try {
+            val b = Builder()
+                .setSession("Config AdBlock EMPTY")
+                .setMtu(8500)
+                .addAddress("10.0.0.2", 32)
+                .addRoute("0.0.0.0", 0)
+                .addDnsServer("10.0.0.2")
+            applyExclusions(b)
+            val p = b.establish()
+            if (p == null) { saveErr("ПУСТОЙ: establish вернул null"); return }
+            tun = p
+            saveErr("ПУСТОЙ: туннель установлен, держим открытым")
+            while (running) {
+                try { Thread.sleep(1000) } catch (e: Exception) { break }
+            }
+        } catch (e: Exception) {
+            saveErr("ПУСТОЙ КРАХ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+        } finally {
+            saveErr("ПУСТОЙ: стоп")
+            running = false
+            isRunning = false
+            try { stopForeground(true) } catch (_: Exception) {}
+        }
     }
 
     // Режим HTTPS: full-tunnel -> Go-движок (MITM-прокси 127.0.0.1:8080)
