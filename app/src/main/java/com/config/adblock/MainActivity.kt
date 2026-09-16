@@ -146,7 +146,7 @@ class MainActivity : AppCompatActivity() {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
                 if (prefs.getBoolean("https_mode", false)) {
-                    base + "\nпрокси: TCP " + mitm.Mitm.tcpCount() + " / DNS " + mitm.Mitm.udpCount() + " / direct " + mitm.Mitm.directCount()
+                    base + "\nTCP: " + mitm.Mitm.tcpTry() + "/" + mitm.Mitm.tcpCount() + " DNS: " + mitm.Mitm.udpTry() + "/" + mitm.Mitm.udpCount() + " direct " + mitm.Mitm.directCount()
                 } else base
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
