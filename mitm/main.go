@@ -107,7 +107,11 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	loadBlocklist(blocklistPath)
 
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
-	goproxy.OkConnect = &goproxy.ConnectAction{Action: goproxy.ConnectAccept, TLSConfig: tlsCfg}
+	// КЛЮЧЕВОЕ: OkConnect — действие по умолчанию для ВСЕХ CONNECT-ов.
+	// ConnectAccept = голый туннель без расшифровки (фильтр не видит
+	// трафик — так было и реклама шла мимо). ConnectMitm = расшифровка
+	// нашим CA — именно это и нужно для блокировки.
+	goproxy.OkConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsCfg}
 	goproxy.MitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsCfg}
 	goproxy.HTTPMitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectHTTPMitm, TLSConfig: tlsCfg}
 
@@ -135,7 +139,7 @@ func StartProxy(filesDir string, blocklistPath string) error {
 			log.Printf("[MITM] proxy error: %v", err)
 		}
 	}()
-	log.Printf("[MITM] proxy on %s", proxyAddr)
+	log.Printf("[MITM] proxy on %s (MITM all)", proxyAddr)
 	return nil
 }
 
