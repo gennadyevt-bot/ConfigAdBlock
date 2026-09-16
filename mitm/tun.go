@@ -193,8 +193,73 @@ var dohEndpoints = []string{
 	"https://dns.google/dns-query",
 }
 
-// resolveDNS: сначала plain UDP по RU-дружественным апстримам, потом DoH.
+var dotEndpoints = []struct {
+	addr string
+	name string
+}{
+	{"94.140.14.14:853", "dns.adguard-dns.com"},
+	{"77.88.8.8:853", "common.dot.dns.yandex.net"},
+}
+
+// resolveDoT: DNS-over-TLS (порт 853). Оператор режет plain UDP 53 —
+// 853 проходит, это и есть рабочий путь.
+func resolveDoT(query []byte) ([]byte, error) {
+	var lastErr error
+	for _, ep := range dotEndpoints {
+		d := net.Dialer{Timeout: 5 * time.Second, Control: protectedControl()}
+		conn, err := tls.DialWithDialer(&d, "tcp", ep.addr, &tls.Config{ServerName: ep.name})
+		if err != nil {
+			lastErr = fmt.Errorf("dot dial %s: %w", ep.addr, err)
+			continue
+		}
+		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
+		var lb [2]byte
+		binary.BigEndian.PutUint16(lb[:], uint16(len(query)))
+		if _, err := conn.Write(lb[:]); err != nil {
+			_ = conn.Close()
+			lastErr = fmt.Errorf("dot write %s: %w", ep.addr, err)
+			continue
+		}
+		if _, err := conn.Write(query); err != nil {
+			_ = conn.Close()
+			lastErr = fmt.Errorf("dot write %s: %w", ep.addr, err)
+			continue
+		}
+		if _, err := io.ReadFull(conn, lb[:]); err != nil {
+			_ = conn.Close()
+			lastErr = fmt.Errorf("dot read-hdr %s: %w", ep.addr, err)
+			continue
+		}
+		resp := make([]byte, binary.BigEndian.Uint16(lb[:]))
+		if _, err := io.ReadFull(conn, resp); err != nil {
+			_ = conn.Close()
+			lastErr = fmt.Errorf("dot read %s: %w", ep.addr, err)
+			continue
+		}
+		_ = conn.Close()
+		if len(resp) >= 12 {
+			return resp, nil
+		}
+		lastErr = fmt.Errorf("dot %s: короткий ответ", ep.addr)
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("DoT: нет апстримов")
+}
+
+// resolveDNS: DoT (853) -> DoH (443) -> plain UDP (53, скорее всего мёртв).
 func resolveDNS(query []byte) ([]byte, error) {
+	if ans, err := resolveDoT(query); err == nil {
+		return ans, nil
+	} else {
+		setErr(err)
+	}
+	if ans, err := resolveDoH(query); err == nil {
+		return ans, nil
+	} else {
+		setErr(err)
+	}
 	var lastErr error
 	for _, up := range udpUpstreams {
 		rconn, err := dialUDP(up)
