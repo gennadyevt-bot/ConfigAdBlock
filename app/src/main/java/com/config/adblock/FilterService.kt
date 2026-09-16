@@ -4,9 +4,14 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
+import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -70,12 +75,69 @@ class FilterService : VpnService() {
             .build()
     }
 
+    // ==== Персистентность CA между переустановками ====
+    // CA бэкапится в общие Загрузки (они не удаляются при сносе приложения)
+    // и восстанавливается в filesDir при первом запуске. Сертификат в
+    // системе продолжает подходить после любой переустановки.
+
+    private fun findInDownloads(name: String): Uri? {
+        if (Build.VERSION.SDK_INT < 29) return null
+        val proj = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME)
+        contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, proj,
+            MediaStore.Downloads.DISPLAY_NAME + "=?", arrayOf(name), null)?.use { c ->
+            if (c.moveToFirst()) return Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0).toString())
+        }
+        return null
+    }
+
+    private fun readFromDownloads(name: String): ByteArray? {
+        val u = findInDownloads(name) ?: return null
+        return contentResolver.openInputStream(u)?.use { it.readBytes() }
+    }
+
+    private fun saveToDownloads(name: String, data: ByteArray) {
+        if (findInDownloads(name) != null) return
+        if (Build.VERSION.SDK_INT >= 29) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val u = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
+            contentResolver.openOutputStream(u)?.use { it.write(data) }
+        } else {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            File(dir, name).writeBytes(data)
+        }
+    }
+
+    private fun ensureCaPersist() {
+        try {
+            val crt = File(filesDir, "ca.crt")
+            val key = File(filesDir, "ca.key")
+            if (crt.exists() && key.exists()) {
+                saveToDownloads("ConfigAdBlock-CA.crt", crt.readBytes())
+                saveToDownloads("ConfigAdBlock-CA.key", key.readBytes())
+                return
+            }
+            val dc = readFromDownloads("ConfigAdBlock-CA.crt")
+            val dk = readFromDownloads("ConfigAdBlock-CA.key")
+            if (dc != null && dk != null) {
+                crt.writeBytes(dc)
+                key.writeBytes(dk)
+                saveErr("CA восстановлен из Загрузок")
+            }
+        } catch (e: Exception) { saveErr("CA persist: " + (e.message ?: "?")) }
+    }
+
     // Режим HTTPS: full-tunnel -> Go-движок (MITM-прокси 127.0.0.1:8080)
-    // с блокировкой доменов из blocklist.txt.
+    // с блокировкой доменов из blocklist.txt и косметикой в HTML.
     private fun runHttpsFilter() {
         saveErr("старт HTTPS")
         var pfd: ParcelFileDescriptor? = null
         try {
+            ensureCaPersist()
             val blFile = File(filesDir, "blocklist.txt")
             try {
                 assets.open("blocklist.txt").bufferedReader().use { r ->
