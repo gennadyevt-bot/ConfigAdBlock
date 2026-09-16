@@ -13,7 +13,7 @@
         android:textColor="@color/white_bg"
         android:textSize="28sp"
         android:textStyle="bold"
-        android:layout_marginBottom="48dp" />
+        android:layout_marginBottom="32dp" />
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnToggle"
         android:layout_width="wrap_content"
@@ -26,14 +26,37 @@
         android:paddingEnd="48dp"
         android:paddingTop="16dp"
         android:paddingBottom="16dp" />
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/chkHttps"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="HTTPS-фильтрация (режет баннеры)"
+        android:textColor="@color/white_bg"
+        android:buttonTint="@color/white_bg"
+        android:layout_marginTop="20dp" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnCert"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="УСТАНОВИТЬ СЕРТИФИКАТ"
+        android:textSize="13sp"
+        android:backgroundTint="@color/white_bg"
+        android:textColor="@color/green_primary"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:layout_marginTop="8dp" />
     <TextView
         android:id="@+id/tvStats"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Всего запросов: 0\nЗаблокировано: 0\nПропущено: 0"
+        android:text="Всего запросов: 0
+Заблокировано: 0
+Пропущено: 0"
         android:textColor="@color/white_bg"
         android:textSize="16sp"
-        android:layout_marginTop="48dp"
+        android:layout_marginTop="32dp"
         android:gravity="center" />
     <TextView
         android:id="@+id/tvError"
