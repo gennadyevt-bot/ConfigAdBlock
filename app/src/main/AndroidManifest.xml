@@ -23,7 +23,16 @@
             android:stopWithTask="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Local DNS ad filter" />
+                android:value="Local DNS/HTTPS ad filter" />
         </service>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.config.adblock.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>
