@@ -17,7 +17,17 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
-const proxyAddr = "127.0.0.1:8080"
+const proxyBindAll = "127.0.0.1:0"
+
+// proxyCur — реальный адрес прокси (порт выбирается ОС на каждый старт:
+// зомби-процесс на фиксированном 8080 больше не мешает).
+var proxyCur string
+
+func proxyCurAddr() string {
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	return proxyCur
+}
 
 var (
 	proxyMu        sync.Mutex
@@ -130,31 +140,20 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return filterHTML(resp)
 	})
 
-	// Если порт уже слушает (висящий старый процесс приложения) —
-	// переиспользуем живой прокси вместо падения.
-	if c, err := net.DialTimeout("tcp", proxyAddr, 300*time.Millisecond); err == nil {
-		_ = c.Close()
-		log.Printf("[MITM] proxy already up, reusing")
-		return nil
-	}
-	var ln net.Listener
-	for i := 0; i < 3; i++ {
-		ln, err = net.Listen("tcp", proxyAddr)
-		if err == nil {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	ln, err := net.Listen("tcp", proxyBindAll)
 	if err != nil {
 		return err
 	}
-	proxySrv = &http.Server{Addr: proxyAddr, Handler: g}
+	proxyMu.Lock()
+	proxyCur = ln.Addr().String()
+	proxyMu.Unlock()
+	proxySrv = &http.Server{Addr: proxyCur, Handler: g}
 	go func() {
 		if err := proxySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[MITM] proxy error: %v", err)
 		}
 	}()
-	log.Printf("[MITM] proxy on %s (MITM all)", proxyAddr)
+	log.Printf("[MITM] proxy on %s (MITM all)", proxyCurAddr())
 	return nil
 }
 
