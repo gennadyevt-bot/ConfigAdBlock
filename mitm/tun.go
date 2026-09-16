@@ -134,23 +134,30 @@ var dohEndpoints = []string{
 
 // resolveDNS: сначала plain UDP по RU-дружественным апстримам, потом DoH.
 func resolveDNS(query []byte) ([]byte, error) {
+	var lastErr error
 	for _, up := range udpUpstreams {
 		rconn, err := net.DialTimeout("udp", up, 4*time.Second)
 		if err != nil {
+			lastErr = fmt.Errorf("dial %s: %w", up, err)
 			continue
 		}
 		_ = rconn.SetDeadline(time.Now().Add(4*time.Second))
 		if _, err := rconn.Write(query); err != nil {
 			rconn.Close()
+			lastErr = fmt.Errorf("write %s: %w", up, err)
 			continue
 		}
 		rbuf := make([]byte, 4096)
 		rn, err := rconn.Read(rbuf)
 		rconn.Close()
 		if err != nil || rn < 12 {
+			lastErr = fmt.Errorf("read %s: %v", up, err)
 			continue
 		}
 		return rbuf[:rn], nil
+	}
+	if lastErr != nil {
+		setErr(lastErr)
 	}
 	return resolveDoH(query)
 }
