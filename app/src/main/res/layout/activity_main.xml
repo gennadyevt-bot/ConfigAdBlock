@@ -68,6 +68,14 @@
         android:textColor="@color/white_bg"
         android:buttonTint="@color/white_bg"
         android:layout_marginTop="4dp" />
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/chkEmpty"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="пустой туннель (только VPN, без движка)"
+        android:textColor="@color/white_bg"
+        android:buttonTint="@color/white_bg"
+        android:layout_marginTop="4dp" />
     <TextView
         android:id="@+id/tvStats"
         android:layout_width="wrap_content"
