@@ -26,12 +26,16 @@ var (
 	tcpCount  int64
 	udpCount  int64
 	directCnt int64
+	tcpTry    int64
+	udpTry    int64
 )
 
 // Счётчики для самотеста на главном экране приложения.
 func TcpCount() int64  { return atomic.LoadInt64(&tcpCount) }
 func UdpCount() int64  { return atomic.LoadInt64(&udpCount) }
 func DirectCount() int64 { return atomic.LoadInt64(&directCnt) }
+func TcpTry() int64     { return atomic.LoadInt64(&tcpTry) }
+func UdpTry() int64     { return atomic.LoadInt64(&udpTry) }
 
 type socks5Server struct {
 	ln  net.Listener
