@@ -1,6 +1,6 @@
 // MITM engine for Config AdBlock.
 // Local forward proxy on 127.0.0.1:8080 decrypts TLS with a per-install CA.
-// Filter logic (blocklist + cosmetic injection) is applied in OnRequest/OnResponse.
+// Blocklist (domains) + cosmetic (CSS/JS) filtering in OnRequest/OnResponse.
 package mitm
 
 import (
@@ -32,7 +32,8 @@ func CaCertPem(filesDir string) ([]byte, error) {
 	return certPEM, err
 }
 
-// loadBlocklist читает список доменов (один домен на строку, '#' — комментарий).
+// loadBlocklist читает список доменов (hosts-формат "0.0.0.0 domain"
+// или просто домен на строку; '#' — комментарий).
 func loadBlocklist(path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -42,14 +43,20 @@ func loadBlocklist(path string) {
 	defer f.Close()
 	m := make(map[string]bool)
 	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for sc.Scan() {
 		d := strings.TrimSpace(strings.ToLower(sc.Text()))
 		if d == "" || strings.HasPrefix(d, "#") {
 			continue
 		}
-		// терпим и формат hosts "0.0.0.0 domain"
 		if fields := strings.Fields(d); len(fields) == 2 {
 			d = fields[1]
+		}
+		if fields := strings.Fields(d); len(fields) > 0 {
+			d = fields[0]
+		}
+		if d == "0.0.0.0" || d == "127.0.0.1" || d == "::1" || d == "255.255.255.255" || d == "::" {
+			continue
 		}
 		d = strings.TrimSuffix(d, ".")
 		m[d] = true
@@ -109,14 +116,13 @@ func StartProxy(filesDir string, blocklistPath string) error {
 
 	g.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		if isBlocked(req.Host) {
-			// Пустой 403: баннер/скрипт просто не загрузится, страница не сломается
+			// Пустой 403: баннер/скрипт не загрузится, страница не сломается
 			return req, goproxy.NewResponse(req, "text/html", http.StatusForbidden, "")
 		}
-		// TODO 0.6.0+: косметика (вырезание остатков баннерных мест)
 		return req, nil
 	})
 	g.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		return resp
+		return filterHTML(resp)
 	})
 
 	ln, err := net.Listen("tcp", proxyAddr)
