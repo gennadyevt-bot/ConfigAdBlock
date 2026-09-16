@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -29,7 +30,67 @@ var (
 	stackMu   sync.Mutex
 	stackInst *stack.Stack
 	stackDev  device.Device
+
+	direct443 int64
 )
+
+// SetDirect443 — отладочный режим: 443-й порт тоже напрямую, без MITM.
+// Контрольный эксперимент: отсекает весь слой goproxy/сертификатов.
+func SetDirect443(v bool) {
+	if v {
+		atomic.StoreInt64(&direct443, 1)
+	} else {
+		atomic.StoreInt64(&direct443, 0)
+	}
+}
+
+func direct443On() bool { return atomic.LoadInt64(&direct443) == 1 }
+
+// Protector реализуется на стороне Android: VpnService.protect(fd).
+// Явная защита сокетов движка, без полагания только на
+// addDisallowedApplication.
+type Protector interface {
+	Protect(fd int64) bool
+}
+
+var (
+	protectorMu sync.RWMutex
+	protector   Protector
+)
+
+func SetProtector(p Protector) {
+	protectorMu.Lock()
+	protector = p
+	protectorMu.Unlock()
+}
+
+func protectedControl() func(string, string, syscall.RawConn) error {
+	protectorMu.RLock()
+	p := protector
+	protectorMu.RUnlock()
+	if p == nil {
+		return nil
+	}
+	return func(network, address string, c syscall.RawConn) error {
+		var perr error
+		_ = c.Control(func(fd uintptr) {
+			if !p.Protect(int64(fd)) {
+				perr = fmt.Errorf("protect(%s) denied", address)
+			}
+		})
+		return perr
+	}
+}
+
+func dialTCP(addr string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 10 * time.Second, Control: protectedControl()}
+	return d.Dial("tcp", addr)
+}
+
+func dialUDP(addr string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 4 * time.Second, Control: protectedControl()}
+	return d.Dial("udp", addr)
+}
 
 // StartTunnel поднимает стек на fd (TUN из establish().detachFd()).
 func StartTunnel(fd int64, mtu int64) error {
@@ -75,9 +136,9 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
 
-	// Не-TLS порты — напрямую, MITM там не нужен
-	if port != 443 {
-		up, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 10*time.Second)
+	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
+	if port != 443 || direct443On() {
+		up, err := dialTCP(net.JoinHostPort(host, strconv.Itoa(port)))
 		if err != nil {
 			setErr(fmt.Errorf("direct %s:%d: %w", host, port, err))
 			return
@@ -88,7 +149,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	}
 
 	// 443 -> goproxy (CONNECT, там MITM и фильтры)
-	g, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	g, err := dialTCP(proxyAddr)
 	if err != nil {
 		setErr(fmt.Errorf("dial goproxy: %w", err))
 		return
@@ -136,7 +197,7 @@ var dohEndpoints = []string{
 func resolveDNS(query []byte) ([]byte, error) {
 	var lastErr error
 	for _, up := range udpUpstreams {
-		rconn, err := net.DialTimeout("udp", up, 4*time.Second)
+		rconn, err := dialUDP(up)
 		if err != nil {
 			lastErr = fmt.Errorf("dial %s: %w", up, err)
 			continue
@@ -154,6 +215,7 @@ func resolveDNS(query []byte) ([]byte, error) {
 			lastErr = fmt.Errorf("read %s: %v", up, err)
 			continue
 		}
+		atomic.AddInt64(&dnsGot, 1)
 		return rbuf[:rn], nil
 	}
 	if lastErr != nil {
