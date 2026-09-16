@@ -13,7 +13,7 @@ import (
 func StartTunnel(fd int64, mtu int64) error {
 	engine.Insert(&engine.Key{
 		Device:   fmt.Sprintf("%s://%d", fdbased.Driver, fd),
-		Proxy:    "http://" + proxyAddr,
+		Proxy:    "socks5://" + socks5Addr,
 		MTU:      int(mtu),
 		LogLevel: "error",
 	})
