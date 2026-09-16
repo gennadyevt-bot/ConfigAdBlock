@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 	"strings"
 	"sync"
 
