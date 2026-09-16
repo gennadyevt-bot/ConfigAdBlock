@@ -138,7 +138,6 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return nil
 	}
 	var ln net.Listener
-	var err error
 	for i := 0; i < 3; i++ {
 		ln, err = net.Listen("tcp", proxyAddr)
 		if err == nil {
