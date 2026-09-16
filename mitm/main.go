@@ -1,66 +1,84 @@
 // MITM engine for Config AdBlock.
-// Listens on 127.0.0.1:8080 as forward proxy; decrypts TLS with a per-install CA.
+// Local forward proxy on 127.0.0.1:8080 decrypts TLS with a per-install CA.
 // Filter logic (blocklist + cosmetic injection) is applied in OnRequest/OnResponse.
 package mitm
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"errors"
 	"log"
-	"math/big"
+	"net"
 	"net/http"
-	"time"
+	"sync"
 
 	"github.com/elazarl/goproxy"
 )
 
-// TODO(android side): generate/persist CA once, export cert PEM for user install.
-func genCA() (tls.Certificate, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Config AdBlock CA", Organization: []string{"Config"}},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+const proxyAddr = "127.0.0.1:8080"
+
+var (
+	proxyMu  sync.Mutex
+	proxySrv *http.Server
+)
+
+// CaCertPem возвращает PEM сертификата ЦА — для экрана установки
+// сертификата. CA при необходимости генерируется и сохраняется в filesDir.
+func CaCertPem(filesDir string) ([]byte, error) {
+	_, certPEM, err := loadOrCreateCA(filesDir)
+	return certPEM, err
 }
 
-func Start() {
-	ca, err := genCA()
-	if err != nil {
-		log.Fatal("CA: ", err)
+// StartProxy запускает локальный MITM-прокси на 127.0.0.1:8080.
+// filesDir — каталог файлов приложения (там хранится CA между запусками).
+func StartProxy(filesDir string) error {
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if proxySrv != nil {
+		return errors.New("proxy already running")
 	}
+
+	ca, _, err := loadOrCreateCA(filesDir)
+	if err != nil {
+		return err
+	}
+
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
 	goproxy.OkConnect = &goproxy.ConnectAction{Action: goproxy.ConnectAccept, TLSConfig: tlsCfg}
 	goproxy.MitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsCfg}
 	goproxy.HTTPMitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectHTTPMitm, TLSConfig: tlsCfg}
 
-	proxy := goproxy.NewProxyHttpServer()
-	proxy.Verbose = false
+	g := goproxy.NewProxyHttpServer()
+	g.Verbose = false
 
-	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	g.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		// TODO 0.6.0: consult blocklist (domain), optionally block; disable QUIC hints.
 		return req, nil
 	})
-	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+	g.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
 		// TODO 0.6.0: if text/html -> inject cosmetic CSS/JS to cut banner placeholders.
 		return resp
 	})
 
-	log.Println("ConfigAdBlock MITM on 127.0.0.1:8080")
-	log.Fatal(http.ListenAndServe("127.0.0.1:8080", proxy))
+	ln, err := net.Listen("tcp", proxyAddr)
+	if err != nil {
+		return err
+	}
+	proxySrv = &http.Server{Addr: proxyAddr, Handler: g}
+	go func() {
+		if err := proxySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[MITM] proxy error: %v", err)
+		}
+	}()
+	log.Printf("[MITM] proxy on %s", proxyAddr)
+	return nil
+}
+
+// StopProxy останавливает прокси (без убийства процесса — в отличие от
+// старого log.Fatal в Start()).
+func StopProxy() {
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if proxySrv != nil {
+		_ = proxySrv.Close()
+		proxySrv = nil
+	}
 }
