@@ -6,8 +6,8 @@ android {
         applicationId = "com.config.adblock"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.4.4"
+        versionCode = 16
+        versionName = "0.5.0"
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -19,6 +19,7 @@ android {
     }
 }
 dependencies {
+    implementation(files("libs/mitm.aar"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
