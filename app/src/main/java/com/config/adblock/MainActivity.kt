@@ -1,6 +1,7 @@
 package com.config.adblock
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -9,6 +10,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.TextView
 import android.widget.Toast
@@ -43,23 +45,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Android 14+ запрещает приложениям показывать окно установки ЦА:
+    // сохраняем сертификат в общие Загрузки (доступны системному
+    // выборщику файлов) и ведём пользователя в настройки безопасности.
     private fun installCert() {
         try {
             val pem = mitm.Mitm.caCertPem(filesDir.absolutePath)
-            val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
-            val f = File(dir, "ConfigAdBlock-CA.crt")
-            f.writeBytes(pem)
-            val uri = androidx.core.content.FileProvider.getUriForFile(this, packageName + ".fileprovider", f)
-            val view = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/x-x509-ca-cert")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val name = "ConfigAdBlock-CA.crt"
+            if (Build.VERSION.SDK_INT >= 29) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri == null) { Toast.makeText(this, "Не удалось сохранить сертификат", Toast.LENGTH_LONG).show(); return }
+                contentResolver.openOutputStream(uri)?.use { it.write(pem) }
+            } else {
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                File(dir, name).writeBytes(pem)
             }
-            try {
-                startActivity(view)
-            } catch (e: Exception) {
-                startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
-                Toast.makeText(this, "Открыл настройки безопасности. Найди сертификат: " + f.absolutePath + " — и установи как сертификат ЦА", Toast.LENGTH_LONG).show()
-            }
+            Toast.makeText(this, "Сертификат сохранён в Загрузки. Дальше: Настройки -> Безопасность -> Установить сертификат -> CA-сертификат -> выбрать " + name, Toast.LENGTH_LONG).show()
+            try { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } catch (_: Exception) {}
         } catch (e: Exception) {
             Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
         }
