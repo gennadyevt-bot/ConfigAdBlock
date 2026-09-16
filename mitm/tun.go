@@ -30,7 +30,7 @@ var (
 
 // StartTunnel поднимает стек на fd (TUN из establish().detachFd()).
 func StartTunnel(fd int64, mtu int64) error {
-	dev, err := fdbased.Open(strconv.Itoa(int(fd)), int(mtu), 0)
+	dev, err := fdbased.Open(strconv.Itoa(int(fd)), uint32(mtu), 0)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func StartTunnel(fd int64, mtu int64) error {
 		TransportHandler: &tunHandler{},
 	})
 	if err != nil {
-		_ = dev.Close()
+		dev.Close()
 		return err
 	}
 	stackMu.Lock()
@@ -58,7 +58,7 @@ func StopTunnel() {
 		stackInst = nil
 	}
 	if stackDev != nil {
-		_ = stackDev.Close()
+		stackDev.Close()
 		stackDev = nil
 	}
 }
