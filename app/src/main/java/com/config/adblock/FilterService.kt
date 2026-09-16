@@ -189,6 +189,7 @@ class FilterService : VpnService() {
             } catch (e: Exception) { saveErr("protect: " + (e.message ?: "?")) }
             try { mitm.Mitm.setDirect443(getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false)) } catch (e: Exception) {}
             val fd = pfd.detachFd()
+            thread { try { mitm.Mitm.netSelfTest() } catch (_: Exception) {} }
             try { mitm.Mitm.startTunnel(fd.toLong(), 8500) }
             catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
             saveErr("туннель поднят, фильтр работает")
@@ -202,6 +203,7 @@ class FilterService : VpnService() {
                         .putLong("udp_ok", mitm.Mitm.udpCount())
                         .putLong("dns_got", mitm.Mitm.dnsGot())
                         .putString("eng_err", mitm.Mitm.lastErr())
+                        .putString("selftest", mitm.Mitm.selfTestResult())
                         .apply()
                 } catch (e: Exception) { break }
             }
