@@ -176,13 +176,10 @@ class MainActivity : AppCompatActivity() {
             btn.postDelayed({ btn.isEnabled = true }, 800)
             if (FilterService.isRunning) {
                 stopService(Intent(this, FilterService::class.java))
-                // и дублируем остановку движка прямо здесь, в фоне —
-                // если сервис подвис, кнопка всё равно выключит фильтр
+                // движок гасит ТОЛЬКО onDestroy сервиса (синхронно) —
+                // дублирование здесь давало гонку: фоновый стоп закрывал
+                // fd свежего туннеля, система сносила VPN
                 FilterService.isRunning = false
-                thread {
-                    try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
-                    try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
-                }
                 btn.postDelayed({ updateUi() }, 500)
             } else {
                 val i = VpnService.prepare(this)
