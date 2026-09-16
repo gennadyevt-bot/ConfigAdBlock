@@ -210,6 +210,7 @@ class FilterService : VpnService() {
                         .putLong("dns_got", mitm.Mitm.dnsGot())
                         .putString("eng_err", mitm.Mitm.lastErr())
                         .putString("selftest", mitm.Mitm.selfTestResult())
+                        .putString("flowlog", mitm.Mitm.flowLog())
                         .apply()
                 } catch (e: Exception) { break }
             }
