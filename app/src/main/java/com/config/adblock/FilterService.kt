@@ -166,7 +166,7 @@ class FilterService : VpnService() {
         try {
             val b = Builder()
                 .setSession("Config AdBlock EMPTY")
-                .setMtu(8500)
+                .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("10.0.0.2")
@@ -213,7 +213,7 @@ class FilterService : VpnService() {
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
-                .setMtu(8500)
+                .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("10.0.0.2")
@@ -247,7 +247,7 @@ class FilterService : VpnService() {
             try { mitm.Mitm.setDirect443(getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false)) } catch (e: Exception) {}
             val fd = pfd.detachFd()
             thread { try { mitm.Mitm.netSelfTest() } catch (_: Exception) {} }
-            try { mitm.Mitm.startTunnel(fd.toLong(), 8500) }
+            try { mitm.Mitm.startTunnel(fd.toLong(), 1500) }
             catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
             saveErr("туннель поднят, фильтр работает")
             while (running) {
