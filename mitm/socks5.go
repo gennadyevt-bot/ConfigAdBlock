@@ -21,13 +21,31 @@ const socks5Addr = "127.0.0.1:1080"
 
 var (
 	socksMu  sync.Mutex
-	socksSrv *socks5Server
-
-	tcpCount  int64
+	socksSrv *socks5Server	tcpCount  int64
 	udpCount  int64
 	directCnt int64
 	tcpTry    int64
 	udpTry    int64
+
+	errMu      sync.Mutex
+	lastErrStr string
+)
+
+// setErr запоминает последнюю ошибку движка (видна на экране приложения).
+func setErr(e error) {
+	if e == nil {
+		return
+	}
+	errMu.Lock()
+	lastErrStr = e.Error()
+	errMu.Unlock()
+}
+
+// LastErr возвращает последнюю ошибку движка (пусто, если всё чисто).
+func LastErr() string {
+	errMu.Lock()
+	defer errMu.Unlock()
+	return lastErrStr
 )
 
 // Счётчики для самотеста на главном экране приложения.
