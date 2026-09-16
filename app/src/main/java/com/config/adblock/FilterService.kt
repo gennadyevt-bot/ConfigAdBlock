@@ -179,6 +179,15 @@ class FilterService : VpnService() {
             if (pfd == null) { saveErr("Слот VPN недоступен после 3 попыток"); return }
             try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = pfd
+            // явная защита сокетов движка (VPN bypass) + отладочный режим
+            try {
+                mitm.Mitm.setProtector(object : mitm.Protector {
+                    override fun protect(fd: Long): Boolean {
+                        return try { this@FilterService.protect(fd.toInt()) } catch (e: Exception) { false }
+                    }
+                })
+            } catch (e: Exception) { saveErr("protect: " + (e.message ?: "?")) }
+            try { mitm.Mitm.setDirect443(getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false)) } catch (e: Exception) {}
             val fd = pfd.detachFd()
             try { mitm.Mitm.startTunnel(fd.toLong(), 8500) }
             catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
@@ -191,6 +200,7 @@ class FilterService : VpnService() {
                         .putLong("tcp_ok", mitm.Mitm.tcpCount())
                         .putLong("udp_try", mitm.Mitm.udpTry())
                         .putLong("udp_ok", mitm.Mitm.udpCount())
+                        .putLong("dns_got", mitm.Mitm.dnsGot())
                         .putString("eng_err", mitm.Mitm.lastErr())
                         .apply()
                 } catch (e: Exception) { break }
