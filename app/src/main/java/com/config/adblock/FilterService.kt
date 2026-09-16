@@ -182,7 +182,16 @@ class FilterService : VpnService() {
             catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
             saveErr("туннель поднят, фильтр работает")
             while (running) {
-                try { Thread.sleep(1000) } catch (e: Exception) { break }
+                try {
+                    Thread.sleep(2000)
+                    getSharedPreferences("stats", MODE_PRIVATE).edit()
+                        .putLong("tcp_try", mitm.Mitm.tcpTry())
+                        .putLong("tcp_ok", mitm.Mitm.tcpCount())
+                        .putLong("udp_try", mitm.Mitm.udpTry())
+                        .putLong("udp_ok", mitm.Mitm.udpCount())
+                        .putString("eng_err", mitm.Mitm.lastErr())
+                        .apply()
+                } catch (e: Exception) { break }
             }
         } catch (e: Exception) {
             saveErr("КРАХ HTTPS: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
