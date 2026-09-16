@@ -21,7 +21,9 @@ const socks5Addr = "127.0.0.1:1080"
 
 var (
 	socksMu  sync.Mutex
-	socksSrv *socks5Server	tcpCount  int64
+	socksSrv *socks5Server
+
+	tcpCount  int64
 	udpCount  int64
 	directCnt int64
 	tcpTry    int64
@@ -46,7 +48,7 @@ func LastErr() string {
 	errMu.Lock()
 	defer errMu.Unlock()
 	return lastErrStr
-)
+}
 
 // Счётчики для самотеста на главном экране приложения.
 func TcpCount() int64  { return atomic.LoadInt64(&tcpCount) }
