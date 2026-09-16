@@ -192,29 +192,55 @@ func StopTunnel() {
 
 type tunHandler struct{}
 
+// flowLog — кольцо последних TCP-потоков для экрана самотеста.
+var (
+	flowMu   sync.Mutex
+	flowRing []string
+)
+
+func flowLog(s string) {
+	flowMu.Lock()
+	flowRing = append(flowRing, s)
+	if len(flowRing) > 4 {
+		flowRing = flowRing[len(flowRing)-4:]
+	}
+	flowMu.Unlock()
+}
+
+// FlowLog возвращает последние потоки одной строкой.
+func FlowLog() string {
+	flowMu.Lock()
+	defer flowMu.Unlock()
+	return strings.Join(flowRing, " | ")
+}
+
 func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	defer conn.Close()
 	atomic.AddInt64(&tcpTry, 1)
 	id := conn.ID()
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
+	hp := net.JoinHostPort(host, strconv.Itoa(port))
 
 	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
 	if port != 443 || direct443On() {
-		up, err := dialTCP(net.JoinHostPort(host, strconv.Itoa(port)))
+		up, err := dialTCP(hp)
 		if err != nil {
-			setErr(fmt.Errorf("direct %s:%d: %w", host, port, err))
+			setErr(fmt.Errorf("direct %s: %w", hp, err))
+			flowLog(hp + "→dirX")
 			return
 		}
 		atomic.AddInt64(&directCnt, 1)
+		flowLog(hp + "→dir")
 		relay(conn, up)
 		return
 	}
 
 	// 443 -> goproxy (CONNECT, там MITM и фильтры)
-	g, err := dialTCP(proxyAddr)
+	g, err := dialTCP(proxyCurAddr())
 	if err != nil {
-		setErr(fmt.Errorf("dial goproxy: %w", err))
+		setErr(fmt.Errorf("dial goproxy %s: %w", proxyCurAddr(), err))
+		flowLog(hp + "→gpX")
 		return
 	}
 	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
@@ -222,9 +248,11 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, "200") {
 		_ = g.Close()
-		setErr(fmt.Errorf("CONNECT %s:%d -> %s", host, port, strings.TrimSpace(status)))
+		setErr(fmt.Errorf("CONNECT %s -> %s", hp, strings.TrimSpace(status)))
+		flowLog(hp + "→gpFAIL")
 		return
 	}
+	flowLog(hp + "→gp200")
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
