@@ -94,6 +94,67 @@ func dialUDP(addr string) (net.Conn, error) {
 	return d.Dial("udp", addr)
 }
 
+var selfTestStr string
+
+func SelfTestResult() string { return selfTestStr }
+
+// NetSelfTest проверяет, что реально доступно из контекста приложения
+// (всё по IP-литералам, без DNS). Результат — строка на экран.
+func NetSelfTest() {
+	parts := []string{}
+	// 1) UDP 53 -> Яндекс (реальный DNS-запрос ya.ru)
+	if c, err := dialUDP("77.88.8.8:53"); err == nil {
+		q := []byte{0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 'y', 'a', 0, 0, 0, 1, 0, 1}
+		_ = c.SetDeadline(time.Now().Add(4 * time.Second))
+		if _, err := c.Write(q); err == nil {
+			if n, err := c.Read(make([]byte, 512)); err == nil && n >= 12 {
+				parts = append(parts, "u53y=OK")
+			} else {
+				parts = append(parts, "u53y=нет")
+			}
+		} else {
+			parts = append(parts, "u53y=ошибка")
+		}
+		c.Close()
+	} else {
+		parts = append(parts, "u53y=x")
+	}
+	// 2) TLS 853 -> Яндекс DoT
+	if c, err := tlsDial("77.88.8.8:853", "common.dot.dns.yandex.net"); err == nil {
+		parts = append(parts, "t853y=OK")
+		c.Close()
+	} else {
+		parts = append(parts, "t853y=нет")
+	}
+	// 3) TLS 853 -> AdGuard
+	if c, err := tlsDial("94.140.14.14:853", "dns.adguard-dns.com"); err == nil {
+		parts = append(parts, "t853a=OK")
+		c.Close()
+	} else {
+		parts = append(parts, "t853a=нет")
+	}
+	// 4) TLS 443 -> AdGuard DoH
+	if c, err := tlsDial("94.140.14.14:443", "dns.adguard-dns.com"); err == nil {
+		parts = append(parts, "t443a=OK")
+		c.Close()
+	} else {
+		parts = append(parts, "t443a=нет")
+	}
+	// 5) TLS 443 -> dns.google (для сравнения)
+	if c, err := tlsDial("8.8.8.8:853", "dns.google"); err == nil {
+		parts = append(parts, "t853g=OK")
+		c.Close()
+	} else {
+		parts = append(parts, "t853g=нет")
+	}
+	selfTestStr = strings.Join(parts, " ")
+}
+
+func tlsDial(addr, serverName string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 5 * time.Second, Control: protectedControl()}
+	return tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: serverName})
+}
+
 // StartTunnel поднимает стек на fd (TUN из establish().detachFd()).
 func StartTunnel(fd int64, mtu int64) error {
 	dev, err := fdbased.Open(strconv.Itoa(int(fd)), uint32(mtu), 0)
