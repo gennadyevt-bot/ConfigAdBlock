@@ -18,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
 import java.io.File
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
@@ -124,7 +125,14 @@ class MainActivity : AppCompatActivity() {
             btn.postDelayed({ btn.isEnabled = true }, 800)
             if (FilterService.isRunning) {
                 stopService(Intent(this, FilterService::class.java))
-                btn.postDelayed({ updateUi() }, 300)
+                // и дублируем остановку движка прямо здесь, в фоне —
+                // если сервис подвис, кнопка всё равно выключит фильтр
+                FilterService.isRunning = false
+                thread {
+                    try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
+                    try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
+                }
+                btn.postDelayed({ updateUi() }, 500)
             } else {
                 val i = VpnService.prepare(this)
                 if (i != null) startActivityForResult(i, 42)
