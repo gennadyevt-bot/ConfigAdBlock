@@ -151,8 +151,11 @@ class FilterService : VpnService() {
             } catch (e: Exception) { saveErr("Списка нет: " + (e.message ?: "?")) }
             try { mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath) }
             catch (e: Exception) { saveErr("Прокси: " + (e.message ?: "?")) }
+            // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
+            // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
+                .setMtu(8500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("10.0.0.2")
