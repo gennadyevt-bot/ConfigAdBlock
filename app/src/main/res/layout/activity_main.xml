@@ -47,6 +47,19 @@
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
         android:layout_marginTop="8dp" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnApps"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ИСКЛЮЧЁННЫЕ ПРИЛОЖЕНИЯ"
+        android:textSize="13sp"
+        android:backgroundTint="@color/white_bg"
+        android:textColor="@color/green_primary"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:layout_marginTop="8dp" />
     <TextView
         android:id="@+id/tvStats"
         android:layout_width="wrap_content"
