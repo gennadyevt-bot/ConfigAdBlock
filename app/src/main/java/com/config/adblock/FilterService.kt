@@ -25,7 +25,8 @@ class FilterService : VpnService() {
     companion object {
         @Volatile var isRunning = false
         private const val CH = "adblock"
-        private const val UPSTREAM = "1.1.1.1"
+        // Яндекс DNS: 1.1.1.1 в РФ заблокирован
+        private const val UPSTREAM = "77.88.8.8"
     }
 
     private var tun: ParcelFileDescriptor? = null
@@ -161,6 +162,7 @@ class FilterService : VpnService() {
                 .addDnsServer("10.0.0.2")
                 .addDisallowedApplication(packageName)
             applyExclusions(b)
+            saveErr("исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
             var tries = 0
             while (tries < 3 && pfd == null && running) {
                 tries++
