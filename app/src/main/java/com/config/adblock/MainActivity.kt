@@ -41,6 +41,12 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, if (isChecked) "HTTPS-режим: реклама режется внутри трафика. Требуется сертификат (кнопка ниже)." else "Обычный DNS-режим", Toast.LENGTH_LONG).show()
         }
         findViewById<MaterialButton>(R.id.btnCert).setOnClickListener { installCert() }
+        val chkNoMitm = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkNoMitm)
+        chkNoMitm.isChecked = prefs.getBoolean("no_mitm", false)
+        chkNoMitm.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("no_mitm", isChecked).apply()
+            Toast.makeText(this, if (isChecked) "Отладка: 443 напрямую, без MITM" else "MITM включён", Toast.LENGTH_LONG).show()
+        }
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
@@ -142,7 +148,7 @@ class MainActivity : AppCompatActivity() {
             else -> "ВКЛЮЧИТЬ"
         }
         val logText = prefs.getString("log", "") ?: ""
-        val lc = "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("udp_ok", 0)
+        val lc = "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0)
         val eerr = prefs.getString("eng_err", "") ?: ""
         err.text = when {
             running -> {
