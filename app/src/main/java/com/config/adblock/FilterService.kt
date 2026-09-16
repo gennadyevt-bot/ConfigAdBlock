@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -69,14 +70,19 @@ class FilterService : VpnService() {
             .build()
     }
 
-    // Режим HTTPS: full-tunnel -> Go-движок (MITM-прокси 127.0.0.1:8080).
-    // Наше приложение исключено из маршрутов, чтобы прокси не ходил в свою
-    // же туннель. DNS остаётся на мобильной сети (системный резолвер).
+    // Режим HTTPS: full-tunnel -> Go-движок (MITM-прокси 127.0.0.1:8080)
+    // с блокировкой доменов из blocklist.txt.
     private fun runHttpsFilter() {
         saveErr("старт HTTPS")
         var pfd: ParcelFileDescriptor? = null
         try {
-            try { mitm.Mitm.startProxy(filesDir.absolutePath) }
+            val blFile = File(filesDir, "blocklist.txt")
+            try {
+                assets.open("blocklist.txt").bufferedReader().use { r ->
+                    blFile.writeText(r.readText())
+                }
+            } catch (e: Exception) { saveErr("Списка нет: " + (e.message ?: "?")) }
+            try { mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath) }
             catch (e: Exception) { saveErr("Прокси: " + (e.message ?: "?")) }
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
@@ -102,7 +108,7 @@ class FilterService : VpnService() {
             val fd = pfd.detachFd()
             try { mitm.Mitm.startTunnel(fd.toLong(), 8500) }
             catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
-            saveErr("туннель поднят, движок работает")
+            saveErr("туннель поднят, фильтр работает")
             while (running) {
                 try { Thread.sleep(1000) } catch (e: Exception) { break }
             }
