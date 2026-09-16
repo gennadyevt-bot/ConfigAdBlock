@@ -9,21 +9,29 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // SOCKS5-шим между tun2socks и MITM-прокси. tun2socks полноценно
-// поддерживает только SOCKS5 (HTTP-режим у него убогий: UDP/DNS через него
-// не идут — из-за этого при полном туннеле умирал весь интернет).
-// TCP CONNECT заворачиваем в goproxy (127.0.0.1:8080) — там MITM и фильтры.
-// UDP-датаграммы (это DNS) ретранслируем напрямую в апстрим 8.8.8.8:53 —
-// приложение исключено из VPN, его UDP ходит напрямую.
+// поддерживает только SOCKS5. TCP 443 -> цепочка в goproxy (MITM+фильтры),
+// остальные порты — напрямую (plain HTTP через MITM ломался бы). UDP 53
+// (DNS) ретранслируем в 8.8.8.8 — приложение исключено из VPN.
 const socks5Addr = "127.0.0.1:1080"
 
 var (
 	socksMu  sync.Mutex
 	socksSrv *socks5Server
+
+	tcpCount  int64
+	udpCount  int64
+	directCnt int64
 )
+
+// Счётчики для самотеста на главном экране приложения.
+func TcpCount() int64  { return atomic.LoadInt64(&tcpCount) }
+func UdpCount() int64  { return atomic.LoadInt64(&udpCount) }
+func DirectCount() int64 { return atomic.LoadInt64(&directCnt) }
 
 type socks5Server struct {
 	ln  net.Listener
@@ -106,13 +114,13 @@ func (s *socks5Server) handleTCP(c net.Conn) {
 	cmd := req[1]
 	var host string
 	switch req[3] {
-	case 1: // IPv4
+	case 1:
 		b := make([]byte, 4)
 		if _, err := io.ReadFull(c, b); err != nil {
 			return
 		}
 		host = net.IP(b).String()
-	case 3: // domain
+	case 3:
 		lb := make([]byte, 1)
 		if _, err := io.ReadFull(c, lb); err != nil {
 			return
@@ -131,45 +139,64 @@ func (s *socks5Server) handleTCP(c net.Conn) {
 	}
 	port := int(pb[0])<<8 | int(pb[1])
 
-	switch cmd {
-	case 1: // CONNECT -> цепочка в goproxy (там MITM и фильтры)
-		g, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if cmd != 1 && cmd != 3 {
+		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	if cmd == 3 { // UDP ASSOCIATE
+		uport := s.udp.LocalAddr().(*net.UDPAddr).Port
+		_, _ = c.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, byte(uport >> 8), byte(uport)})
+		_ = c.SetDeadline(time.Time{})
+		_, _ = io.Copy(io.Discard, c)
+		return
+	}
+
+	// CONNECT. Только 443 идёт через MITM (там TLS и фильтры); остальное —
+	// прямое соединение, иначе plain HTTP ломался бы попыткой TLS.
+	if port != 443 {
+		up, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprint(port)), 10*time.Second)
 		if err != nil {
 			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 			return
 		}
-		_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
-		br := bufio.NewReader(g)
-		status, err := br.ReadString('\n')
-		if err != nil || !strings.Contains(status, "200") {
+		_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+		atomic.AddInt64(&directCnt, 1)
+		_ = c.SetDeadline(time.Time{})
+		relay(c, up)
+		return
+	}
+
+	g, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if err != nil {
+		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
+	br := bufio.NewReader(g)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, "200") {
+		_ = g.Close()
+		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
 			_ = g.Close()
-			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 			return
 		}
-		for { // добить заголовки ответа прокси
-			line, err := br.ReadString('\n')
-			if err != nil {
-				_ = g.Close()
-				return
-			}
-			if line == "\r\n" {
-				break
-			}
+		if line == "\r\n" {
+			break
 		}
-		_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-		_ = c.SetDeadline(time.Time{})
-		if br.Buffered() > 0 {
-			_, _ = io.CopyN(c, br, int64(br.Buffered()))
-		}
-		relay(c, g)
-	case 3: // UDP ASSOCIATE — отдаём адрес нашего UDP-релея
-		uport := s.udp.LocalAddr().(*net.UDPAddr).Port
-		_, _ = c.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, byte(uport >> 8), byte(uport)})
-		_ = c.SetDeadline(time.Time{})
-		_, _ = io.Copy(io.Discard, c) // держим, пока клиент жив
-	default:
-		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
 	}
+	_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	atomic.AddInt64(&tcpCount, 1)
+	_ = c.SetDeadline(time.Time{})
+	if br.Buffered() > 0 {
+		_, _ = io.CopyN(c, br, int64(br.Buffered()))
+	}
+	relay(c, g)
 }
 
 func (s *socks5Server) udpLoop() {
@@ -185,7 +212,6 @@ func (s *socks5Server) udpLoop() {
 	}
 }
 
-// UDP-фрейм SOCKS5: [rsv rsv frag atyp addr.. port(2) payload..]
 func (s *socks5Server) handleUDP(pkt []byte, client *net.UDPAddr) {
 	if len(pkt) < 10 || pkt[2] != 0 {
 		return
@@ -193,19 +219,19 @@ func (s *socks5Server) handleUDP(pkt []byte, client *net.UDPAddr) {
 	var target string
 	off := 4
 	switch pkt[3] {
-	case 1: // IPv4
+	case 1:
 		ip := net.IP(pkt[4:8])
 		off = 8
 		port := int(pkt[off])<<8 | int(pkt[off+1])
 		off += 2
 		if ip.String() == "10.0.0.2" {
-			ip = net.ParseIP("8.8.8.8") // наш VPN-DNS -> реальный апстрим
+			ip = net.ParseIP("8.8.8.8")
 		}
 		if port != 53 {
-			return // ретранслируем только DNS
+			return
 		}
 		target = net.JoinHostPort(ip.String(), "53")
-	case 3: // domain
+	case 3:
 		if len(pkt) < 5 {
 			return
 		}
@@ -240,6 +266,7 @@ func (s *socks5Server) handleUDP(pkt []byte, client *net.UDPAddr) {
 	if err != nil {
 		return
 	}
+	atomic.AddInt64(&udpCount, 1)
 	raddr, _ := net.ResolveUDPAddr("udp", target)
 	out := make([]byte, 0, rn+10)
 	out = append(out, 0, 0, 0, 1)
