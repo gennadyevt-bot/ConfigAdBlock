@@ -269,8 +269,7 @@ var dotEndpoints = []struct {
 func resolveDoT(query []byte) ([]byte, error) {
 	var lastErr error
 	for _, ep := range dotEndpoints {
-		d := net.Dialer{Timeout: 5 * time.Second, Control: protectedControl()}
-		conn, err := tls.DialWithDialer(&d, "tcp", ep.addr, &tls.Config{ServerName: ep.name})
+		conn, err := tlsDial(ep.addr, ep.name)
 		if err != nil {
 			lastErr = fmt.Errorf("dot dial %s: %w", ep.addr, err)
 			continue
