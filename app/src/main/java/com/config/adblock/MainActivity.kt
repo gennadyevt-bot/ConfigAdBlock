@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, if (isChecked) "HTTPS-режим: реклама режется внутри трафика. Требуется сертификат (кнопка ниже)." else "Обычный DNS-режим", Toast.LENGTH_LONG).show()
         }
         findViewById<MaterialButton>(R.id.btnCert).setOnClickListener { installCert() }
+        findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -69,6 +70,34 @@ class MainActivity : AppCompatActivity() {
             }
             Toast.makeText(this, "Сертификат сохранён в Загрузки. Дальше: Настройки -> Безопасность -> Установить сертификат -> CA-сертификат -> выбрать " + name, Toast.LENGTH_LONG).show()
             try { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Приложения с закреплением сертификатов (Kimi, банки и т.п.) ломаются
+    // через MITM — их можно исключить из VPN: без фильтра, но работают.
+    private fun pickExcludedApps() {
+        try {
+            val pm = packageManager
+            val li = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+            val apps = pm.queryIntentActivities(li, 0)
+                .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+                .distinctBy { it.first }.sortedBy { it.second }
+            val names = apps.map { it.second }.toTypedArray()
+            val pkgs = apps.map { it.first }
+            val excluded = prefs.getStringSet("excluded_apps", emptySet()) ?: emptySet()
+            val checked = pkgs.map { it in excluded }.toBooleanArray()
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Исключить из фильтра")
+                .setMultiChoiceItems(names, checked) { _, which, isChecked -> checked[which] = isChecked }
+                .setPositiveButton("Сохранить") { _, _ ->
+                    val sel = pkgs.filterIndexed { i, _ -> checked[i] }.toSet()
+                    prefs.edit().putStringSet("excluded_apps", sel).apply()
+                    Toast.makeText(this, "Исключено: " + sel.size + ". Выключи и включи фильтр", Toast.LENGTH_LONG).show()
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
         } catch (e: Exception) {
             Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
         }
