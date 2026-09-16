@@ -105,6 +105,9 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return err
 	}
 	loadBlocklist(blocklistPath)
+	if err := startSocks5(); err != nil {
+		return err
+	}
 
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
 	// КЛЮЧЕВОЕ: OkConnect — действие по умолчанию для ВСЕХ CONNECT-ов.
@@ -147,6 +150,7 @@ func StartProxy(filesDir string, blocklistPath string) error {
 func StopProxy() {
 	proxyMu.Lock()
 	defer proxyMu.Unlock()
+	stopSocks5()
 	if proxySrv != nil {
 		_ = proxySrv.Close()
 		proxySrv = nil
