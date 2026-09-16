@@ -193,7 +193,7 @@ func (s *socks5Server) handleTCP(c net.Conn) {
 		return
 	}
 
-	g, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	g, err := dialTCP(proxyCurAddr())
 	if err != nil {
 		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
