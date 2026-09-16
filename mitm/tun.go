@@ -122,10 +122,37 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 // UDP 53, поэтому апстрим — только по 443 в обход перехвата.
 var dohClient = &http.Client{Timeout: 6 * time.Second}
 
+// Апстримы, доступные из РФ: AdGuard DNS (сам режет рекламу на DNS-уровне)
+// и Яндекс. Cloudflare/Google с 2024 у большинства российских операторов
+// заблокированы — оттуда и было "DoH: все апстримы недоступны".
+var udpUpstreams = []string{"94.140.14.14:53", "77.88.8.8:53", "8.8.8.8:53"}
+
 var dohEndpoints = []string{
-	"https://1.1.1.1/dns-query",
-	"https://1.0.0.1/dns-query",
+	"https://94.140.14.14/dns-query",
 	"https://dns.google/dns-query",
+}
+
+// resolveDNS: сначала plain UDP по RU-дружественным апстримам, потом DoH.
+func resolveDNS(query []byte) ([]byte, error) {
+	for _, up := range udpUpstreams {
+		rconn, err := net.DialTimeout("udp", up, 4*time.Second)
+		if err != nil {
+			continue
+		}
+		_ = rconn.SetDeadline(time.Now().Add(4*time.Second))
+		if _, err := rconn.Write(query); err != nil {
+			rconn.Close()
+			continue
+		}
+		rbuf := make([]byte, 4096)
+		rn, err := rconn.Read(rbuf)
+		rconn.Close()
+		if err != nil || rn < 12 {
+			continue
+		}
+		return rbuf[:rn], nil
+	}
+	return resolveDoH(query)
 }
 
 func resolveDoH(query []byte) ([]byte, error) {
@@ -164,7 +191,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	if err != nil || n <= 0 {
 		return
 	}
-	ans, err := resolveDoH(buf[:n])
+	ans, err := resolveDNS(buf[:n])
 	if err != nil {
 		setErr(err)
 		return
