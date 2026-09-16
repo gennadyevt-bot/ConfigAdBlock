@@ -79,6 +79,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	if port != 443 {
 		up, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 10*time.Second)
 		if err != nil {
+			setErr(fmt.Errorf("direct %s:%d: %w", host, port, err))
 			return
 		}
 		atomic.AddInt64(&directCnt, 1)
@@ -89,6 +90,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	// 443 -> goproxy (CONNECT, там MITM и фильтры)
 	g, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
 	if err != nil {
+		setErr(fmt.Errorf("dial goproxy: %w", err))
 		return
 	}
 	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
@@ -96,6 +98,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, "200") {
 		_ = g.Close()
+		setErr(fmt.Errorf("CONNECT %s:%d -> %s", host, port, strings.TrimSpace(status)))
 		return
 	}
 	for {
@@ -163,6 +166,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 	ans, err := resolveDoH(buf[:n])
 	if err != nil {
+		setErr(err)
 		return
 	}
 	atomic.AddInt64(&udpCount, 1)
