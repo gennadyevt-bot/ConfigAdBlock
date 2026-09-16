@@ -142,15 +142,16 @@ class MainActivity : AppCompatActivity() {
             else -> "ВКЛЮЧИТЬ"
         }
         val logText = prefs.getString("log", "") ?: ""
+        val lc = "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("udp_ok", 0)
+        val eerr = prefs.getString("eng_err", "") ?: ""
         err.text = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
-                if (prefs.getBoolean("https_mode", false)) {
-                    base + "\nTCP: " + mitm.Mitm.tcpTry() + "/" + mitm.Mitm.tcpCount() + " DNS: " + mitm.Mitm.udpTry() + "/" + mitm.Mitm.udpCount() + " direct " + mitm.Mitm.directCount()
-                } else base
+                if (prefs.getBoolean("https_mode", false)) base + "\n" + lc + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
+                else base
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
-            else -> "Последнее: " + lasterr + "\n\nЖурнал:\n" + logText
+            else -> "Последнее: " + lasterr + "\n" + lc + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
         }
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
