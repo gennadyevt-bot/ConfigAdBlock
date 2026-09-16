@@ -155,6 +155,7 @@ class FilterService : VpnService() {
                 .setSession("Config AdBlock HTTPS")
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
+                .addDnsServer("10.0.0.2")
                 .addDisallowedApplication(packageName)
             applyExclusions(b)
             var tries = 0
