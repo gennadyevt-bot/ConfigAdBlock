@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 	"strings"
 	"sync"
 
@@ -129,7 +130,22 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return filterHTML(resp)
 	})
 
-	ln, err := net.Listen("tcp", proxyAddr)
+	// Если порт уже слушает (висящий старый процесс приложения) —
+	// переиспользуем живой прокси вместо падения.
+	if c, err := net.DialTimeout("tcp", proxyAddr, 300*time.Millisecond); err == nil {
+		_ = c.Close()
+		log.Printf("[MITM] proxy already up, reusing")
+		return nil
+	}
+	var ln net.Listener
+	var err error
+	for i := 0; i < 3; i++ {
+		ln, err = net.Listen("tcp", proxyAddr)
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err != nil {
 		return err
 	}
