@@ -28,6 +28,7 @@ var (
 	directCnt int64
 	tcpTry    int64
 	udpTry    int64
+	dnsGot    int64
 
 	errMu      sync.Mutex
 	lastErrStr string
@@ -56,6 +57,7 @@ func UdpCount() int64  { return atomic.LoadInt64(&udpCount) }
 func DirectCount() int64 { return atomic.LoadInt64(&directCnt) }
 func TcpTry() int64     { return atomic.LoadInt64(&tcpTry) }
 func UdpTry() int64     { return atomic.LoadInt64(&udpTry) }
+func DnsGot() int64    { return atomic.LoadInt64(&dnsGot) }
 
 type socks5Server struct {
 	ln  net.Listener
