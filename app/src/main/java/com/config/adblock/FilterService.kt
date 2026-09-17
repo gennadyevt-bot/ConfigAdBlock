@@ -367,6 +367,8 @@ class FilterService : VpnService() {
                         .putLong("gp_ok", mitm.Mitm.gpOkExt())
                         .putLong("gp_fail", mitm.Mitm.gpFailExt())
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
+                        .putLong("t443", mitm.Mitm.t443Seen())
+                        .putLong("quic", mitm.Mitm.quicRelays())
                         .apply()
                 } catch (e: Exception) { break }
             }
