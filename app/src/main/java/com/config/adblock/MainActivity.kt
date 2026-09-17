@@ -115,6 +115,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun saveStopToLog() {
+        try {
+            val prefs = getSharedPreferences("stats", MODE_PRIVATE)
+            prefs.edit().putString("lasterr", "выключаю...").apply()
+        } catch (_: Exception) {}
+    }
+
     private fun startFilter() {
         val i = Intent(this, FilterService::class.java)
         i.putExtra("https", prefs.getBoolean("https_mode", false))
@@ -175,12 +182,13 @@ class MainActivity : AppCompatActivity() {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
             if (FilterService.isRunning) {
-                stopService(Intent(this, FilterService::class.java))
-                // движок гасит ТОЛЬКО onDestroy сервиса (синхронно) —
-                // дублирование здесь давало гонку: фоновый стоп закрывал
-                // fd свежего туннеля, система сносила VPN
+                saveStopToLog()
+                val si = Intent(this, FilterService::class.java)
+                si.action = "STOP"
+                startService(si)
                 FilterService.isRunning = false
-                btn.postDelayed({ updateUi() }, 500)
+                btn.postDelayed({ updateUi() }, 400)
+                btn.postDelayed({ updateUi() }, 1500)
             } else {
                 val i = VpnService.prepare(this)
                 if (i != null) startActivityForResult(i, 42)
