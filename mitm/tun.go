@@ -223,10 +223,15 @@ func flowLog(s string) {
 }
 
 var (
-	gpOk    int64
-	gpFail  int64
-	gpDial  int64
+	gpOk       int64
+	gpFail     int64
+	gpDial     int64
+	t443seen   int64
+	quicRelays int64
 )
+
+func T443Seen() int64   { return atomic.LoadInt64(&t443seen) }
+func QuicRelays() int64 { return atomic.LoadInt64(&quicRelays) }
 
 func GpOk() int64   { return atomic.LoadInt64(&gpOk) }
 func GpFail() int64 { return atomic.LoadInt64(&gpFail) }
@@ -246,6 +251,9 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
 	hp := net.JoinHostPort(host, strconv.Itoa(port))
+	if port == 443 {
+		atomic.AddInt64(&t443seen, 1)
+	}
 
 	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
 	if port != 443 || direct443On() {
