@@ -282,6 +282,7 @@ class FilterService : VpnService() {
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
                 .addDnsServer("10.0.0.2")
                 .addDisallowedApplication(packageName)
             applyExclusions(b)
