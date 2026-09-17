@@ -233,19 +233,28 @@ class FilterService : VpnService() {
         var pfd: ParcelFileDescriptor? = null
         try {
             ensureCaPersist()
+            saveErr("1/5 CA готов")
             val blFile = File(filesDir, "blocklist.txt")
             try {
                 assets.open("blocklist.txt").bufferedReader().use { r ->
                     blFile.writeText(r.readText())
                 }
             } catch (e: Exception) { saveErr("Списка нет: " + (e.message ?: "?")) }
-            try {
-                mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
-                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "прокси: OK").apply()
-            } catch (e: Exception) {
-                saveErr("ПРОКСИ НЕ ЗАПУСТИЛСЯ: " + (e.message ?: "?"))
-                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "ПРОКСИ: " + (e.message ?: "?")).apply()
-                return
+            saveErr("2/5 вызов startProxy...")
+            val pxt = thread {
+                try {
+                    mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                    getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "прокси: OK").apply()
+                    saveErr("2/5 прокси запущен")
+                } catch (e: Exception) {
+                    saveErr("ПРОКСИ НЕ ЗАПУСТИЛСЯ: " + (e.message ?: "?"))
+                    getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "ПРОКСИ: " + (e.message ?: "?")).apply()
+                }
+            }
+            pxt.join(12000)
+            if (pxt.isAlive) {
+                saveErr("2/5 startProxy ЗАВИС >12с (Go-движок мёртв)")
+                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "прокси: ЗАВИС").apply()
             }
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
@@ -284,10 +293,18 @@ class FilterService : VpnService() {
             } catch (e: Exception) { saveErr("protect: " + (e.message ?: "?")) }
             try { mitm.Mitm.setDirect443(getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false)) } catch (e: Exception) {}
             val fd = pfd.detachFd()
+            saveErr("3/5 вызов startTunnel...")
+            val stt = thread {
+                try { mitm.Mitm.startTunnel(fd.toLong(), 1500) }
+                catch (e: Exception) { saveErr("СТЕК: " + (e.message ?: "?")) }
+            }
+            stt.join(12000)
+            if (stt.isAlive) {
+                saveErr("3/5 startTunnel ЗАВИС >12с (Go-движок мёртв)")
+                return
+            }
             thread { try { mitm.Mitm.netSelfTest() } catch (_: Exception) {} }
-            try { mitm.Mitm.startTunnel(fd.toLong(), 1500) }
-            catch (e: Exception) { saveErr("Стек: " + (e.message ?: "?")); return }
-            saveErr("туннель поднят, фильтр работает")
+            saveErr("4/5 туннель поднят, фильтр работает")
             while (running) {
                 try {
                     Thread.sleep(2000)
