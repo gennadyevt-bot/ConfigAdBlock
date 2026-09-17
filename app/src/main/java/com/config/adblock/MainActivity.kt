@@ -34,6 +34,17 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("stats", MODE_PRIVATE)
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         findViewById<TextView>(R.id.tvVersion).text = "v" + ver
+        // пинг движка: если gomobile-runtime зависает ещё на старте —
+        // увидим это ДО любого запуска фильтра
+        thread {
+            var pingRes = "ping: ?"
+            try {
+                val t = thread { pingRes = if (mitm.Mitm.ping() == 42L) "ping: OK" else "ping: ?" }
+                t.join(3000)
+                if (t.isAlive) pingRes = "ping: ЗАВИС (runtime мёртв)"
+            } catch (e: Exception) { pingRes = "ping: " + (e.message ?: "?") }
+            prefs.edit().putString("ping", pingRes).apply()
+        }
         val chk = findViewById<MaterialCheckBox>(R.id.chkHttps)
         chk.isChecked = prefs.getBoolean("https_mode", false)
         chk.setOnCheckedChangeListener { _, isChecked ->
@@ -181,6 +192,7 @@ class MainActivity : AppCompatActivity() {
         val pst = prefs.getString("proxy_state", "") ?: ""
         val fl = prefs.getString("flowlog", "") ?: ""
         val vpna = prefs.getString("vpn_alive", "") ?: ""
+        val ping = prefs.getString("ping", "") ?: ""
         err.text = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
@@ -191,7 +203,7 @@ class MainActivity : AppCompatActivity() {
                 else base
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
-            else -> "Последнее: " + lasterr + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
+            else -> (if (ping.isNotEmpty()) ping + "\n" else "") + "Последнее: " + lasterr + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
         }
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
