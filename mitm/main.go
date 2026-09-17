@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"errors"
 	"log"
+	"sync/atomic"
 	"net"
 	"net/http"
 	"os"
@@ -21,12 +22,15 @@ const proxyBindAll = "127.0.0.1:0"
 
 // proxyCur — реальный адрес прокси (порт выбирается ОС на каждый старт:
 // зомби-процесс на фиксированном 8080 больше не мешает).
-var proxyCur string
+// Читается ТОЛЬКО через atomic.Value: если кто-то случайно держит proxyMu,
+// 443-потоки не должны умирать на чтении адреса (так гибли 101 поток).
+var proxyCurAddrV atomic.Value
 
 func proxyCurAddr() string {
-	proxyMu.Lock()
-	defer proxyMu.Unlock()
-	return proxyCur
+	if v := proxyCurAddrV.Load(); v != nil {
+		return v.(string)
+	}
+	return "127.0.0.1:0"
 }
 
 var (
@@ -163,8 +167,8 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	// ВАЖНО: proxyMu УЖЕ захвачен на входе StartProxy (defer Unlock) —
 	// повторный Lock() того же потока = вечный self-deadlock. Здесь
 	// пишем без повторного захвата.
-	proxyCur = ln.Addr().String()
-	proxySrv = &http.Server{Addr: proxyCur, Handler: g}
+	proxyCurAddrV.Store(ln.Addr().String())
+	proxySrv = &http.Server{Addr: ln.Addr().String(), Handler: g}
 	go func() {
 		if err := proxySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[MITM] proxy error: %v", err)
