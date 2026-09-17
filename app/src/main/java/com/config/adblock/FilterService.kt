@@ -272,19 +272,19 @@ class FilterService : VpnService() {
             applyExclusions(b)
             saveErr("исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
             var tries = 0
-            while (tries < 3 && pfd == null && running) {
+            while (tries < 5 && pfd == null && running) {
                 tries++
                 pfd = try { b.establish() } catch (e: Exception) { saveErr("VPN слот: " + (e.message ?: "ошибка")); null }
                 if (pfd == null) {
-                    saveErr("Слот недоступен. Переспрашиваю разрешение ($tries/3)...")
+                    saveErr("Слот недоступен ($tries/5), подожду 4с...")
                     try {
                         val pi = VpnService.prepare(this)
                         if (pi != null) { pi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(pi) }
                     } catch (e: Exception) { saveErr("Запрос разрешения: " + (e.message ?: "?")) }
-                    try { Thread.sleep(2500) } catch (e: Exception) {}
+                    try { Thread.sleep(4000) } catch (e: Exception) {}
                 }
             }
-            if (pfd == null) { saveErr("Слот VPN недоступен после 3 попыток"); return }
+            if (pfd == null) { saveErr("Слот VPN недоступен после 5 попыток"); return }
             try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = pfd
             // явная защита сокетов движка (VPN bypass) + отладочный режим
