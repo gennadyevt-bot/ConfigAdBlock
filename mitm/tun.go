@@ -283,6 +283,93 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 
 // handle443 вынесен отдельно, чтобы перехватить панику: gVisor молча
 // глотает паники в обработчиках (72 потока исчезали бесследно).
+// Счётчики этапов собственного MITM-пайплайна (матрица диагностики).
+var (
+	cliHello   int64
+	cliTLSOk   int64
+	cliTLSFail int64
+	upDialOk   int64
+	upDialFail int64
+	upTLSOk    int64
+	upTLSFail  int64
+	httpReqN   int64
+	httpRespN  int64
+	blockedN   int64
+)
+
+func MitmStats() string {
+	return "tls " + strconv.FormatInt(atomic.LoadInt64(&cliTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&cliTLSFail), 10) +
+		" up " + strconv.FormatInt(atomic.LoadInt64(&upDialOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upDialFail), 10) +
+		" utls " + strconv.FormatInt(atomic.LoadInt64(&upTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upTLSFail), 10) +
+		" http " + strconv.FormatInt(atomic.LoadInt64(&httpReqN), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&httpRespN), 10) +
+		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10)
+}
+
+// lookupA резолвит A-запись через наш DoT (не зависит от резолвера Go).
+func lookupA(name string) (string, error) {
+	q := []byte{0xAB, 0xCD, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0}
+	for _, part := range strings.Split(name, ".") {
+		if len(part) == 0 || len(part) > 63 {
+			return "", errors.New("bad name")
+		}
+		q = append(q, byte(len(part)))
+		q = append(q, part...)
+	}
+	q = append(q, 0, 0, 1, 0, 1)
+	ans, err := resolveDNS(q)
+	if err != nil {
+		return "", err
+	}
+	if len(ans) < 12 {
+		return "", errors.New("short answer")
+	}
+	qd := int(ans[4])<<8 | int(ans[5])
+	an := int(ans[6])<<8 | int(ans[7])
+	off := 12
+	for i := 0; i < qd && off < len(ans); i++ {
+		for off < len(ans) {
+			l := int(ans[off])
+			if l == 0 {
+				off++
+				break
+			}
+			if l&0xC0 == 0xC0 {
+				off += 2
+				break
+			}
+			off += 1 + l
+		}
+		off += 4
+	}
+	for i := 0; i < an && off+12 <= len(ans); i++ {
+		for off < len(ans) {
+			l := int(ans[off])
+			if l == 0 {
+				off++
+				break
+			}
+			if l&0xC0 == 0xC0 {
+				off += 2
+				break
+			}
+			off += 1 + l
+		}
+		if off+10 > len(ans) {
+			break
+		}
+		typ := int(ans[off])<<8 | int(ans[off+1])
+		rdlen := int(ans[off+8])<<8 | int(ans[off+9])
+		off += 10
+		if typ == 1 && rdlen == 4 && off+4 <= len(ans) {
+			return fmt.Sprintf("%d.%d.%d.%d", ans[off], ans[off+1], ans[off+2], ans[off+3]), nil
+		}
+		off += rdlen
+	}
+	return "", errors.New("no A record")
+}
+
+// handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
+// наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -291,41 +378,125 @@ func handle443(conn adapter.TCPConn, hp string) {
 		}
 		_ = conn.Close()
 	}()
-	flowLog(hp + "→gp-enter")
-	g, err := dialLocal(proxyCurAddr())
-	if err != nil {
-		setErr(fmt.Errorf("dial goproxy %s: %w", proxyCurAddr(), err))
-		atomic.AddInt64(&gpDial, 1)
-		flowLog(hp + "→gpDialX")
+	flowLog(hp + "→mitm")
+	cfg := mitmCfg
+	if cfg == nil {
+		flowLog(hp + "→noCfg")
 		return
 	}
-	_, _ = fmt.Fprintf(g, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hp, hp)
-	br := bufio.NewReader(g)
-	status, err := br.ReadString('\n')
-	if err != nil || !strings.Contains(status, "200") {
-		_ = g.Close()
-		atomic.AddInt64(&gpFail, 1)
-		setErr(fmt.Errorf("CONNECT %s -> %q", hp, strings.TrimSpace(status)))
-		flowLog(hp + "→gpFAIL")
+	tlsConn := tls.Server(conn, cfg)
+	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
+	atomic.AddInt64(&cliHello, 1)
+	if err := tlsConn.Handshake(); err != nil {
+		atomic.AddInt64(&cliTLSFail, 1)
+		setErr(fmt.Errorf("cliTLS %s: %w", hp, err))
+		flowLog(hp + "→cliTLSfail")
 		return
 	}
-	atomic.AddInt64(&gpOk, 1)
-	flowLog(hp + "→gp200")
+	atomic.AddInt64(&cliTLSOk, 1)
+	_ = tlsConn.SetDeadline(time.Time{})
+	flowLog(hp + "→cliTLSok")
+	br := bufio.NewReader(tlsConn)
 	for {
-		line, err := br.ReadString('\n')
+		req, err := http.ReadRequest(br)
 		if err != nil {
-			_ = g.Close()
 			return
 		}
-		if line == "\r\n" {
-			break
+		atomic.AddInt64(&httpReqN, 1)
+		host := req.Host
+		if host == "" {
+			continue
+		}
+		if isBlocked(host) {
+			atomic.AddInt64(&blockedN, 1)
+			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
+			resp.Header.Set("Content-Type", "text/html")
+			_ = resp.Write(tlsConn)
+			if req.Close {
+				return
+			}
+			continue
+		}
+		atomic.AddInt64(&upDialOk, 0) // накрутка запрещена, держим структуру счётчиков
+		target := host
+		if !strings.Contains(target, ":") {
+			target += ":443"
+		}
+		up, err := dialTCP(target)
+		if err != nil {
+			ip, lerr := lookupA(strings.Split(host, ":")[0])
+			if lerr != nil {
+				atomic.AddInt64(&upDialFail, 1)
+				setErr(fmt.Errorf("upDial %s: %v / %v", target, err, lerr))
+				write502(tlsConn)
+				if req.Close {
+					return
+				}
+				continue
+			}
+			up, err = dialTCP(net.JoinHostPort(ip, "443"))
+			if err != nil {
+				atomic.AddInt64(&upDialFail, 1)
+				setErr(fmt.Errorf("upDial %s: %w", target, err))
+				write502(tlsConn)
+				if req.Close {
+					return
+				}
+				continue
+			}
+		}
+		atomic.AddInt64(&upDialOk, 1)
+		serverName := strings.Split(host, ":")[0]
+		upTLS := tls.Client(up, &tls.Config{ServerName: serverName})
+		if err := upTLS.Handshake(); err != nil {
+			atomic.AddInt64(&upTLSFail, 1)
+			setErr(fmt.Errorf("upTLS %s: %w", serverName, err))
+			_ = up.Close()
+			write502(tlsConn)
+			if req.Close {
+				return
+			}
+			continue
+		}
+		atomic.AddInt64(&upTLSOk, 1)
+		req.URL.Scheme = "https"
+		req.URL.Host = target
+		req.RequestURI = ""
+		req.Header.Del("Proxy-Connection")
+		req.Header.Del("Proxy-Authenticate")
+		req.Header.Del("Proxy-Authorization")
+		if err := req.Write(upTLS); err != nil {
+			_ = up.Close()
+			if req.Close {
+				return
+			}
+			continue
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(upTLS), req)
+		if err != nil {
+			_ = up.Close()
+			setErr(fmt.Errorf("upRead %s: %w", serverName, err))
+			write502(tlsConn)
+			if req.Close {
+				return
+			}
+			continue
+		}
+		atomic.AddInt64(&httpRespN, 1)
+		resp = filterHTML(resp)
+		if err := resp.Write(tlsConn); err != nil {
+			_ = up.Close()
+			return
+		}
+		_ = up.Close()
+		if req.Close || resp.Close {
+			return
 		}
 	}
-	atomic.AddInt64(&tcpCount, 1)
-	if br.Buffered() > 0 {
-		_, _ = io.CopyN(conn, br, int64(br.Buffered()))
-	}
-	relay(conn, g)
+}
+
+func write502(w io.Writer) {
+	_, _ = io.WriteString(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 }
 
 // DNS через DNS-over-HTTPS: операторы РФ перехватывают/глушет plain
