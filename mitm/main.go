@@ -20,6 +20,19 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
+// DoHHosts — DoH/DoT-эндпоинты: их НЕЛЬЗЯ MITM'ить (клиенты не доверяют
+// нашему CA -> "unknown certificate" -> DNS мёртв). Пакетный уровень:
+// используется и старым прокси (goproxy), и нашим пайплайном (tun.go).
+var DoHHosts = map[string]bool{
+	"1.1.1.1": true, "1.0.0.1": true, "8.8.8.8": true, "8.8.4.4": true,
+	"9.9.9.9": true, "149.112.112.112": true,
+	"77.88.8.8": true, "77.88.8.1": true,
+	"94.140.14.14": true, "94.140.15.15": true,
+	"dns.google": true, "mozilla.cloudflare-dns.com": true,
+	"cloudflare-dns.com": true, "dns.adguard-dns.com": true,
+	"common.dot.dns.yandex.net": true,
+}
+
 // dohHandler реализует goproxy.HttpsHandler для прямого туннелирования.
 type dohHandler struct {
 	action *goproxy.ConnectAction
@@ -172,7 +185,8 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	// для IP-литералов (1.1.1.1 и т.п.) -> DoH мёртв -> браузер не может
 	// резолвить -> "не удаётся открыть веб-страницу". Туннелируем их
 	// напрямую (настоящие сертификаты), фильтруем весь остальной трафик.
-	dohHosts := map[string]bool{
+	_ = DoHHosts // локальный алиас для читаемости
+	dohHosts := DoHHosts
 		"1.1.1.1": true, "1.0.0.1": true, "8.8.8.8": true, "8.8.4.4": true,
 		"9.9.9.9": true, "149.112.112.112": true,
 		"77.88.8.8": true, "77.88.8.1": true,
