@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -34,6 +35,15 @@ var (
 	blockedDomains = make(map[string]bool)
 	blockedMu      sync.RWMutex
 )
+
+// Ping — проверка, что gomobile-runtime жив и отвечает.
+func Ping() int64 { return 42 }
+
+// stage пишет метку стадии в файлы приложения (читает Kotlin и показывает
+// в журнале — находим точное место зависания startProxy).
+func stage(filesDir, s string) {
+	_ = os.WriteFile(filepath.Join(filesDir, "stage.txt"), []byte(s), 0644)
+}
 
 // CaCertPem возвращает PEM сертификата ЦА — для экрана установки
 // сертификата. CA при необходимости генерируется и сохраняется в filesDir.
@@ -110,11 +120,15 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return errors.New("proxy already running")
 	}
 
+	stage(filesDir, "A: enter startProxy")
 	ca, _, err := loadOrCreateCA(filesDir)
 	if err != nil {
+		stage(filesDir, "A2: CA error "+err.Error())
 		return err
 	}
+	stage(filesDir, "B: CA loaded")
 	loadBlocklist(blocklistPath)
+	stage(filesDir, "C: blocklist loaded")
 
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
 	// КЛЮЧЕВОЕ: OkConnect — действие по умолчанию для ВСЕХ CONNECT-ов.
@@ -139,10 +153,13 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return filterHTML(resp)
 	})
 
+	stage(filesDir, "D: before listen")
 	ln, err := net.Listen("tcp", proxyBindAll)
 	if err != nil {
+		stage(filesDir, "D2: listen error "+err.Error())
 		return err
 	}
+	stage(filesDir, "E: listening "+ln.Addr().String())
 	proxyMu.Lock()
 	proxyCur = ln.Addr().String()
 	proxyMu.Unlock()
@@ -152,6 +169,7 @@ func StartProxy(filesDir string, blocklistPath string) error {
 			log.Printf("[MITM] proxy error: %v", err)
 		}
 	}()
+	stage(filesDir, "F: serve started")
 	log.Printf("[MITM] proxy on %s (MITM all)", proxyCurAddr())
 	return nil
 }
