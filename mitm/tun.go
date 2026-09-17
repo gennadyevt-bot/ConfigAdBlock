@@ -186,10 +186,9 @@ func StackStats() string {
 		return "stack: нет"
 	}
 	s := st.Stats()
-	return "ip4=" + strconv.FormatUint(uint64(s.IP.PacketsReceived), 10) +
-		" ip6=" + strconv.FormatUint(uint64(s.IPv6.PacketsReceived), 10) +
-		" tcp=" + strconv.FormatUint(uint64(s.TCP.PacketsReceived), 10) +
-		" udp=" + strconv.FormatUint(uint64(s.UDP.PacketsReceived), 10)
+	return "ip=" + strconv.FormatUint(s.IP.PacketsReceived.Value(), 10) +
+		" tcpseg=" + strconv.FormatUint(s.TCP.ValidSegmentsReceived.Value(), 10) +
+		" udp=" + strconv.FormatUint(s.UDP.PacketsReceived.Value(), 10)
 }
 
 // StopTunnel останавливает стек и закрывает fd (Android освободит TUN).
