@@ -312,9 +312,28 @@ class FilterService : VpnService() {
                 val myUid = applicationInfo.uid
                 saveErr("our uid=" + myUid)
                 try {
-                    val ci = packageManager.getApplicationInfo("com.android.chrome", 0)
-                    saveErr("chrome uid=" + ci.uid + (if (ci.uid == myUid) " (тот же профиль)" else " (ДРУГОЙ профиль!)"))
-                } catch (e: Exception) { saveErr("chrome: не найден") }
+                    val browsers = listOf(
+                        "com.android.chrome", "com.yandex.browser", "org.mozilla.firefox",
+                        "com.opera.browser", "com.microsoft.emmx", "com.brave.browser",
+                        "com.vivaldi.browser", "mark.via", "com.UCMobile.intl",
+                        "com.huawei.browser", "com.sec.android.app.sbrowser"
+                    )
+                    val found = StringBuilder()
+                    for (pkg in browsers) {
+                        try {
+                            packageManager.getApplicationInfo(pkg, 0)
+                            found.append(pkg).append(" ")
+                        } catch (_: Exception) {}
+                    }
+                    saveErr("браузеры: " + (if (found.isEmpty()) "из списка нет" else found.toString()))
+                    // дефолтный обработчик https
+                    try {
+                        val hi = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://example.com"))
+                        val acts = packageManager.queryIntentActivities(hi, 0)
+                        val top = acts.firstOrNull()?.activityInfo?.packageName ?: "?"
+                        saveErr("дефолт браузер: " + top)
+                    } catch (e: Exception) { saveErr("дефолт: ?") }
+                } catch (e: Exception) { saveErr("браузеры: ошибка") }
             } catch (_: Exception) {}
             // явная защита сокетов движка (VPN bypass) + отладочный режим
             try {
