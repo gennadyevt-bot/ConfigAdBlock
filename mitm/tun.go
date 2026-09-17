@@ -379,9 +379,18 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	flowLog(hp + "→mitm")
-	cfg := mitmCfg
-	if cfg == nil {
+	if mitmCfgFunc == nil {
 		flowLog(hp + "→noCfg")
+		return
+	}
+	hostOnly := hp
+	if i := strings.LastIndex(hp, ":"); i > 0 {
+		hostOnly = hp[:i]
+	}
+	cfg, cerr := mitmCfgFunc(hostOnly, nil)
+	if cerr != nil || cfg == nil {
+		setErr(fmt.Errorf("mitmCfg %s: %v", hp, cerr))
+		flowLog(hp + "→cfgErr")
 		return
 	}
 	tlsConn := tls.Server(conn, cfg)
