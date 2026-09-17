@@ -201,11 +201,21 @@ var (
 func flowLog(s string) {
 	flowMu.Lock()
 	flowRing = append(flowRing, s)
-	if len(flowRing) > 4 {
-		flowRing = flowRing[len(flowRing)-4:]
+	if len(flowRing) > 16 {
+		flowRing = flowRing[len(flowRing)-16:]
 	}
 	flowMu.Unlock()
 }
+
+var (
+	gpOk    int64
+	gpFail  int64
+	gpDial  int64
+)
+
+func GpOk() int64   { return atomic.LoadInt64(&gpOk) }
+func GpFail() int64 { return atomic.LoadInt64(&gpFail) }
+func GpDial() int64 { return atomic.LoadInt64(&gpDial) }
 
 // FlowLog возвращает последние потоки одной строкой.
 func FlowLog() string {
@@ -240,7 +250,8 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	g, err := dialTCP(proxyCurAddr())
 	if err != nil {
 		setErr(fmt.Errorf("dial goproxy %s: %w", proxyCurAddr(), err))
-		flowLog(hp + "→gpX")
+		atomic.AddInt64(&gpDial, 1)
+		flowLog(hp + "→gpDialX")
 		return
 	}
 	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
@@ -248,10 +259,12 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, "200") {
 		_ = g.Close()
-		setErr(fmt.Errorf("CONNECT %s -> %s", hp, strings.TrimSpace(status)))
+		atomic.AddInt64(&gpFail, 1)
+		setErr(fmt.Errorf("CONNECT %s -> %q", hp, strings.TrimSpace(status)))
 		flowLog(hp + "→gpFAIL")
 		return
 	}
+	atomic.AddInt64(&gpOk, 1)
 	flowLog(hp + "→gp200")
 	for {
 		line, err := br.ReadString('\n')
