@@ -161,15 +161,30 @@ class FilterService : VpnService() {
     }
 
     private fun saveToDownloads(name: String, data: ByteArray) {
-        if (findInDownloads(name) != null) return
         if (Build.VERSION.SDK_INT >= 29) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?.let { u -> contentResolver.openOutputStream(u)?.use { it.write(data) } }
+            } catch (e: Exception) {
+                // конфликт имени (Failed to build unique file) — удалим
+                // нашу старую запись с таким именем и повторим один раз
+                try {
+                    val u = findInDownloads(name)
+                    if (u != null) contentResolver.delete(u, null, null)
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, name)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?.let { u2 -> contentResolver.openOutputStream(u2)?.use { it.write(data) } }
+                } catch (_: Exception) {}
             }
-            val u = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
-            contentResolver.openOutputStream(u)?.use { it.write(data) }
         } else {
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             dir.mkdirs()
@@ -284,7 +299,10 @@ class FilterService : VpnService() {
                     try { Thread.sleep(4000) } catch (e: Exception) {}
                 }
             }
-            if (pfd == null) { saveErr("Слот VPN недоступен после 5 попыток"); return }
+            if (pfd == null) {
+                if (!running) { saveErr("стоп до поднятия туннеля (это не ошибка)"); return }
+                saveErr("Слот VPN недоступен после 5 попыток"); return
+            }
             try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = pfd
             // явная защита сокетов движка (VPN bypass) + отладочный режим
