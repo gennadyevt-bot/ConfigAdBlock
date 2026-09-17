@@ -122,10 +122,24 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    private fun logClick(msg: String) {
+        try {
+            val prefs = getSharedPreferences("stats", MODE_PRIVATE)
+            val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            val log = (prefs.getString("log", "") ?: "") + ts + " " + msg + "\n"
+            prefs.edit().putString("log", log.takeLast(1500)).apply()
+        } catch (_: Exception) {}
+    }
+
     private fun startFilter() {
         val i = Intent(this, FilterService::class.java)
         i.putExtra("https", prefs.getBoolean("https_mode", false))
-        startForegroundService(i)
+        try {
+            startForegroundService(i)
+            logClick("сервис запущен")
+        } catch (e: Exception) {
+            logClick("СЕРВИС НЕ ЗАПУСТИЛСЯ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+        }
     }
 
     override fun onResume() {
@@ -190,11 +204,19 @@ class MainActivity : AppCompatActivity() {
                 btn.postDelayed({ updateUi() }, 400)
                 btn.postDelayed({ updateUi() }, 1500)
             } else {
-                val i = VpnService.prepare(this)
-                if (i != null) startActivityForResult(i, 42)
-                else {
-                    startFilter()
-                    btn.postDelayed({ updateUi() }, 500)
+                logClick("ВКЛЮЧИТЬ нажато")
+                try {
+                    val i = VpnService.prepare(this)
+                    logClick("consent нужен=" + (i != null))
+                    if (i != null) {
+                        startActivityForResult(i, 42)
+                        logClick("диалог согласия показан")
+                    } else {
+                        startFilter()
+                        btn.postDelayed({ updateUi() }, 500)
+                    }
+                } catch (e: Exception) {
+                    logClick("ОШИБКА клика: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
                 }
             }
         }
