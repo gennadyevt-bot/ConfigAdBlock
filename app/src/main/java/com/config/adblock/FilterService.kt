@@ -61,6 +61,18 @@ class FilterService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "STOP") {
+            saveErr("SVC получен STOP")
+            running = false
+            isRunning = false
+            thread {
+                try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
+                try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
+            }
+            try { stopForeground(true) } catch (_: Exception) {}
+            stopSelf()
+            return START_NOT_STICKY
+        }
         httpsMode = intent?.getBooleanExtra("https", false) == true
         val emptyMode = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("empty_vpn", false) } catch (_: Exception) { false }
         saveErr("SVC onStartCommand https=" + httpsMode + " empty=" + emptyMode)
