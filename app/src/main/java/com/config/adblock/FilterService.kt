@@ -369,6 +369,7 @@ class FilterService : VpnService() {
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
                         .putLong("t443", mitm.Mitm.t443Seen())
                         .putLong("quic", mitm.Mitm.quicRelays())
+                        .putString("mitmstats", mitm.Mitm.mitmStats())
                         .apply()
                 } catch (e: Exception) { break }
             }
