@@ -509,6 +509,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	if _, err := up.Write(buf[:n]); err != nil {
 		return
 	}
+	atomic.AddInt64(&quicRelays, 1)
 	_ = up.SetReadDeadline(time.Now().Add(30 * time.Second))
 	rbuf := make([]byte, 64*1024)
 	for {
