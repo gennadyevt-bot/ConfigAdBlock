@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
     android:background="@color/green_primary"
+    android:fillViewport="true">
+<LinearLayout
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
     android:padding="32dp">
     <TextView
         android:layout_width="wrap_content"
@@ -12,8 +16,15 @@
         android:text="Config AdBlock"
         android:textColor="@color/white_bg"
         android:textSize="28sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="32dp" />
+        android:textStyle="bold" />
+    <TextView
+        android:id="@+id/tvVersion"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/white_bg"
+        android:textSize="12sp"
+        android:layout_marginBottom="24dp" />
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnToggle"
         android:layout_width="wrap_content"
@@ -96,12 +107,5 @@
         android:textSize="13sp"
         android:layout_marginTop="24dp"
         android:gravity="center" />
-    <TextView
-        android:id="@+id/tvVersion"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textColor="@color/white_bg"
-        android:textSize="12sp"
-        android:layout_marginTop="24dp" />
 </LinearLayout>
+</ScrollView>
