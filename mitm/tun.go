@@ -293,6 +293,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 // Счётчики этапов собственного MITM-пайплайна (матрица диагностики).
 var (
 	cliHello   int64
+	dohPassN   int64
 	cliTLSOk   int64
 	cliTLSFail int64
 	upDialOk   int64
@@ -465,6 +466,19 @@ func handle443(conn adapter.TCPConn, hp string) {
 	hostOnly := hp
 	if i := strings.LastIndex(hp, ":"); i > 0 {
 		hostOnly = hp[:i]
+	}
+	// DoH-эндпоинты: сырой туннель без MITM (иначе "unknown certificate",
+	// т.к. клиент не доверяет нашему CA -> DNS умирает целиком)
+	if DoHHosts[hostOnly] {
+		up, err := dialTCP(hp)
+		if err != nil {
+			flowLog(hp + "→dohX")
+			return
+		}
+		atomic.AddInt64(&dohPassN, 1)
+		flowLog(hp + "→dohPass")
+		relay(conn, up)
+		return
 	}
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
