@@ -32,6 +32,7 @@ class FilterService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     @Volatile private var running = false
     @Volatile private var httpsMode = false
+    private var fgTicks = 0
 
     private fun saveErr(msg: String) {
         try {
@@ -65,7 +66,8 @@ class FilterService : VpnService() {
         saveErr("SVC onStartCommand https=" + httpsMode + " empty=" + emptyMode)
         try { saveErr("alwaysOn=" + isAlwaysOn + " lockdown=" + isLockdownEnabled) } catch (_: Exception) {}
         try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
-        try { startForeground(1, buildNotification(if (httpsMode) "Фильтр работает (HTTPS)" else "Фильтр работает")) } catch (e: Exception) { saveErr("FGS: " + (e.message ?: "?")) }
+        saveErr("notifPerm=" + notifPermGranted())
+        goForeground(if (httpsMode) "Фильтр работает (HTTPS)" else "Фильтр работает")
         if (!isRunning) {
             running = true
             isRunning = true
@@ -92,14 +94,38 @@ class FilterService : VpnService() {
 
     private fun buildNotification(text: String): Notification {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel(CH, "Работа фильтра", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH, "Работа фильтра", NotificationManager.IMPORTANCE_DEFAULT))
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Config AdBlock")
             .setContentText(text)
             .setContentIntent(pi)
+            .setOngoing(true)
             .build()
+    }
+
+    // КРИТИЧНО для Android 14: foreground-сервис без ПОКАЗАННОГО
+    // уведомления система душит через секунды → VPN умирает вместе
+    // с сервисом. Стартуем с явным типом specialUse и повторяем
+    // startForeground периодически.
+    private fun goForeground(text: String) {
+        try {
+            val n = buildNotification(text)
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(1, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(1, n)
+            }
+        } catch (e: Exception) {
+            saveErr("FGS не стартовал: " + (e.message ?: "?"))
+        }
+    }
+
+    private fun notifPermGranted(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            try { checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED } catch (e: Exception) { false }
+        } else true
     }
 
     // ==== Персистентность CA между переустановками ====
@@ -264,6 +290,8 @@ class FilterService : VpnService() {
                         }
                         getSharedPreferences("stats", MODE_PRIVATE).edit().putString("vpn_alive", "жив").apply()
                     } catch (_: Exception) {}
+                    fgTicks++
+                    if (fgTicks % 15 == 0) goForeground(if (httpsMode) "Фильтр работает (HTTPS)" else "Фильтр работает")
                     getSharedPreferences("stats", MODE_PRIVATE).edit()
                         .putLong("tcp_try", mitm.Mitm.tcpTry())
                         .putLong("tcp_ok", mitm.Mitm.tcpCount())
