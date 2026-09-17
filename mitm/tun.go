@@ -270,6 +270,20 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	}
 
 	// 443 -> goproxy (CONNECT, там MITM и фильтры)
+	handle443(conn, hp)
+}
+
+// handle443 вынесен отдельно, чтобы перехватить панику: gVisor молча
+// глотает паники в обработчиках (72 потока исчезали бесследно).
+func handle443(conn adapter.TCPConn, hp string) {
+	defer func() {
+		if r := recover(); r != nil {
+			setErr(fmt.Errorf("PANIC 443 %s: %v", hp, r))
+			flowLog(hp + "→PANIC")
+		}
+		_ = conn.Close()
+	}()
+	flowLog(hp + "→gp-enter")
 	g, err := dialTCP(proxyCurAddr())
 	if err != nil {
 		setErr(fmt.Errorf("dial goproxy %s: %w", proxyCurAddr(), err))
