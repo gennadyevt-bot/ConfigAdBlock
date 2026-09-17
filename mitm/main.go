@@ -6,6 +6,7 @@ package mitm
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"log"
 	"sync/atomic"
@@ -148,7 +149,13 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	stage(filesDir, "C: blocklist loaded")
 
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
-	mitmCfgFunc = tlsCfg // наш собственный 443-пайплайн (tun.go) использует тот же CA
+	// свой 443-пайплайн (tun.go) подписывает сертификаты сам —
+	// отдаём ему CA и распарсенный сертификат для подписи.
+	if len(ca.Certificate) > 0 {
+		if xc, perr := x509.ParseCertificate(ca.Certificate[0]); perr == nil {
+			setMITMCA(ca, xc)
+		}
+	}
 	// КЛЮЧЕВОЕ: OkConnect — действие по умолчанию для ВСЕХ CONNECT-ов.
 	// ConnectAccept = голый туннель без расшифровки (фильтр не видит
 	// трафик — так было и реклама шла мимо). ConnectMitm = расшифровка
