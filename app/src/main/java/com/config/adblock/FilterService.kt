@@ -306,7 +306,6 @@ class FilterService : VpnService() {
             }
             try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = pfd
-            try { saveErr("allowBypass=" + b.allowsBypass()) } catch (_: Exception) {}
             try {
                 val myUid = applicationInfo.uid
                 saveErr("our uid=" + myUid)
