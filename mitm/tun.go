@@ -302,6 +302,33 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 // UDP 53, поэтому апстрим — только по 443 в обход перехвата.
 var dohClient = &http.Client{Timeout: 6 * time.Second}
 
+// Простейший кэш DNS-ответов: резко снижает зависимость от живости DoT.
+var (
+	dnsCacheMu sync.Mutex
+	dnsCache   = map[string][]byte{}
+	dnsCacheN  int
+)
+
+func dnsCacheGet(key string) ([]byte, bool) {
+	dnsCacheMu.Lock()
+	defer dnsCacheMu.Unlock()
+	v, ok := dnsCache[key]
+	return v, ok
+}
+
+func dnsCachePut(key string, v []byte) {
+	dnsCacheMu.Lock()
+	defer dnsCacheMu.Unlock()
+	if dnsCacheN > 2048 {
+		dnsCache = map[string][]byte{}
+		dnsCacheN = 0
+	}
+	cp := make([]byte, len(v))
+	copy(cp, v)
+	dnsCache[key] = cp
+	dnsCacheN++
+}
+
 // Апстримы, доступные из РФ: AdGuard DNS (сам режет рекламу на DNS-уровне)
 // и Яндекс. Cloudflare/Google с 2024 у большинства российских операторов
 // заблокированы — оттуда и было "DoH: все апстримы недоступны".
@@ -327,7 +354,7 @@ func resolveDoT(query []byte) ([]byte, error) {
 	for _, ep := range dotEndpoints {
 		conn, err := tlsDial(ep.addr, ep.name)
 		if err != nil {
-			lastErr = fmt.Errorf("dot dial %s: %w", ep.addr, err)
+			lastErr = fmt.Errorf("dot-%s dial: %w", ep.name, err)
 			continue
 		}
 		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
@@ -335,23 +362,23 @@ func resolveDoT(query []byte) ([]byte, error) {
 		binary.BigEndian.PutUint16(lb[:], uint16(len(query)))
 		if _, err := conn.Write(lb[:]); err != nil {
 			_ = conn.Close()
-			lastErr = fmt.Errorf("dot write %s: %w", ep.addr, err)
+			lastErr = fmt.Errorf("dot-%s write: %w", ep.name, err)
 			continue
 		}
 		if _, err := conn.Write(query); err != nil {
 			_ = conn.Close()
-			lastErr = fmt.Errorf("dot write %s: %w", ep.addr, err)
+			lastErr = fmt.Errorf("dot-%s write: %w", ep.name, err)
 			continue
 		}
 		if _, err := io.ReadFull(conn, lb[:]); err != nil {
 			_ = conn.Close()
-			lastErr = fmt.Errorf("dot read-hdr %s: %w", ep.addr, err)
+			lastErr = fmt.Errorf("dot-%s read-hdr: %w", ep.name, err)
 			continue
 		}
 		resp := make([]byte, binary.BigEndian.Uint16(lb[:]))
 		if _, err := io.ReadFull(conn, resp); err != nil {
 			_ = conn.Close()
-			lastErr = fmt.Errorf("dot read %s: %w", ep.addr, err)
+			lastErr = fmt.Errorf("dot-%s read: %w", ep.name, err)
 			continue
 		}
 		_ = conn.Close()
@@ -447,11 +474,18 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 
 	if isDNS {
+		key := string(buf[:n])
+		if cached, ok := dnsCacheGet(key); ok {
+			atomic.AddInt64(&udpCount, 1)
+			_, _ = conn.Write(cached)
+			return
+		}
 		ans, err := resolveDNS(buf[:n])
 		if err != nil {
 			setErr(err)
 			return
 		}
+		dnsCachePut(key, ans)
 		atomic.AddInt64(&udpCount, 1)
 		_, _ = conn.Write(ans)
 		return
