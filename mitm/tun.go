@@ -176,6 +176,22 @@ func StartTunnel(fd int64, mtu int64) error {
 	return nil
 }
 
+// StackStats возвращает счётчики пакетов стека: отвечает на вопрос GPT —
+// видит ли gVisor вообще пакеты (вкл. IPv6), и доходят ли TCP/UDP до стека.
+func StackStats() string {
+	stackMu.Lock()
+	st := stackInst
+	stackMu.Unlock()
+	if st == nil {
+		return "stack: нет"
+	}
+	s := st.Stats()
+	return "ip4=" + strconv.FormatUint(uint64(s.IP.PacketsReceived), 10) +
+		" ip6=" + strconv.FormatUint(uint64(s.IPv6.PacketsReceived), 10) +
+		" tcp=" + strconv.FormatUint(uint64(s.TCP.PacketsReceived), 10) +
+		" udp=" + strconv.FormatUint(uint64(s.UDP.PacketsReceived), 10)
+}
+
 // StopTunnel останавливает стек и закрывает fd (Android освободит TUN).
 func StopTunnel() {
 	stackMu.Lock()
