@@ -352,6 +352,9 @@ class FilterService : VpnService() {
                         .putString("eng_err", mitm.Mitm.lastErr())
                         .putString("selftest", mitm.Mitm.selfTestResult())
                         .putString("flowlog", mitm.Mitm.flowLog())
+                        .putLong("gp_ok", mitm.Mitm.gpOkExt())
+                        .putLong("gp_fail", mitm.Mitm.gpFailExt())
+                        .putLong("gp_dial", mitm.Mitm.gpDialExt())
                         .apply()
                 } catch (e: Exception) { break }
             }
