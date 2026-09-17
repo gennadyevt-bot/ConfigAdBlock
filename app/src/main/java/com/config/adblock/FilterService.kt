@@ -256,6 +256,10 @@ class FilterService : VpnService() {
                 saveErr("2/5 startProxy ЗАВИС >12с (Go-движок мёртв)")
                 getSharedPreferences("stats", MODE_PRIVATE).edit().putString("proxy_state", "прокси: ЗАВИС").apply()
             }
+            try {
+                val stg = File(filesDir, "stage.txt")
+                if (stg.exists()) saveErr("stage: " + stg.readText())
+            } catch (_: Exception) {}
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
             val b = Builder()
