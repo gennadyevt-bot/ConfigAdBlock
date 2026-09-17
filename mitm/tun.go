@@ -291,7 +291,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		flowLog(hp + "→gpDialX")
 		return
 	}
-	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
+	_, _ = fmt.Fprintf(g, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hp, hp)
 	br := bufio.NewReader(g)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, "200") {
