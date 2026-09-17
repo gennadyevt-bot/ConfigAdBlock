@@ -1,6 +1,13 @@
 package mitm
 
 import (
+	"math/big"
+	"encoding/pem"
+	"crypto/x509/pkix"
+	"crypto/x509"
+	"crypto/rand"
+	"crypto/elliptic"
+	"crypto/ecdsa"
 	"bufio"
 	"bytes"
 	"crypto/tls"
@@ -305,6 +312,82 @@ func MitmStats() string {
 		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10)
 }
 
+// Своя фабрика сертификатов хостов (вместо goproxy TLSConfigFromCA —
+// та паниковала на nil ctx). Подписываем нашим CA, кэшируем по имени,
+// для IP-литералов кладём IP в SAN.
+var (
+	mitmCAMu   sync.Mutex
+	mitmCACert *tls.Certificate
+	mitmCAX509 *x509.Certificate
+	certCacheMu sync.Mutex
+	certCache   = map[string]*tls.Certificate{}
+)
+
+func setMITMCA(cert tls.Certificate, x509cert *x509.Certificate) {
+	mitmCAMu.Lock()
+	mitmCACert = &cert
+	mitmCAX509 = x509cert
+	mitmCAMu.Unlock()
+	certCacheMu.Lock()
+	certCache = map[string]*tls.Certificate{}
+	certCacheMu.Unlock()
+}
+
+func certForName(name string) (*tls.Certificate, error) {
+	certCacheMu.Lock()
+	if c, ok := certCache[name]; ok {
+		certCacheMu.Unlock()
+		return c, nil
+	}
+	certCacheMu.Unlock()
+
+	mitmCAMu.Lock()
+	ca := mitmCACert
+	caX := mitmCAX509
+	mitmCAMu.Unlock()
+	if ca == nil || caX == nil {
+		return nil, errors.New("no CA")
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: name},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().AddDate(2, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SignatureAlgorithm:    x509.ECDSAWithSHA256,
+		BasicConstraintsValid: true,
+	}
+	if ip := net.ParseIP(name); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{name}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caX, &key.PublicKey, ca.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	certCacheMu.Lock()
+	certCache[name] = &pair
+	certCacheMu.Unlock()
+	return &pair, nil
+}
+
 // lookupA резолвит A-запись через наш DoT (не зависит от резолвера Go).
 func lookupA(name string) (string, error) {
 	q := []byte{0xAB, 0xCD, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0}
@@ -379,19 +462,19 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	flowLog(hp + "→mitm")
-	if mitmCfgFunc == nil {
-		flowLog(hp + "→noCfg")
-		return
-	}
 	hostOnly := hp
 	if i := strings.LastIndex(hp, ":"); i > 0 {
 		hostOnly = hp[:i]
 	}
-	cfg, cerr := mitmCfgFunc(hostOnly, nil)
-	if cerr != nil || cfg == nil {
-		setErr(fmt.Errorf("mitmCfg %s: %v", hp, cerr))
-		flowLog(hp + "→cfgErr")
-		return
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			name := hello.ServerName
+			if name == "" {
+				name = hostOnly
+			}
+			return certForName(name)
+		},
 	}
 	tlsConn := tls.Server(conn, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
