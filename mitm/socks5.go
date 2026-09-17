@@ -58,6 +58,9 @@ func DirectCount() int64 { return atomic.LoadInt64(&directCnt) }
 func TcpTry() int64     { return atomic.LoadInt64(&tcpTry) }
 func UdpTry() int64     { return atomic.LoadInt64(&udpTry) }
 func DnsGot() int64    { return atomic.LoadInt64(&dnsGot) }
+func GpOkExt() int64   { return atomic.LoadInt64(&gpOk) }
+func GpFailExt() int64 { return atomic.LoadInt64(&gpFail) }
+func GpDialExt() int64 { return atomic.LoadInt64(&gpDial) }
 
 type socks5Server struct {
 	ln  net.Listener
