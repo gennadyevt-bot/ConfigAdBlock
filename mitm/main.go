@@ -146,6 +146,21 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	g := goproxy.NewProxyHttpServer()
 	g.Verbose = false
 
+	// DoH-серверы (DNS поверх HTTPS, к которым ломятся браузеры) НЕ
+	// пропускаем через MITM: поддельный сертификат без IP-SAN рвёт TLS
+	// для IP-литералов (1.1.1.1 и т.п.) -> DoH мёртв -> браузер не может
+	// резолвить -> "не удаётся открыть веб-страницу". Туннелируем их
+	// напрямую (настоящие сертификаты), фильтруем весь остальной трафик.
+	dohAccept := &goproxy.ConnectAction{Action: goproxy.ConnectAccept}
+	g.OnRequest(goproxy.DstHostIs(
+		"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
+		"77.88.8.8", "77.88.8.1", "94.140.14.14", "94.140.15.15",
+		"dns.google", "mozilla.cloudflare-dns.com", "cloudflare-dns.com",
+		"dns.adguard-dns.com", "common.dot.dns.yandex.net",
+	)).HandleConnect(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+		return dohAccept, host
+	})
+
 	g.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		if isBlocked(req.Host) {
 			// Пустой 403: баннер/скрипт не загрузится, страница не сломается
