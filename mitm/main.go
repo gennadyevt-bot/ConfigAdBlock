@@ -160,9 +160,10 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return err
 	}
 	stage(filesDir, "E: listening "+ln.Addr().String())
-	proxyMu.Lock()
+	// ВАЖНО: proxyMu УЖЕ захвачен на входе StartProxy (defer Unlock) —
+	// повторный Lock() того же потока = вечный self-deadlock. Здесь
+	// пишем без повторного захвата.
 	proxyCur = ln.Addr().String()
-	proxyMu.Unlock()
 	proxySrv = &http.Server{Addr: proxyCur, Handler: g}
 	go func() {
 		if err := proxySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
