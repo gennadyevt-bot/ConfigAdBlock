@@ -415,24 +415,54 @@ func resolveDoH(query []byte) ([]byte, error) {
 }
 
 // DNS: каждый UDP-поток на порт 53 — один запрос-ответ.
+// UDP: релей в апстрим для ЛЮБОГО порта. Порт 53 — через DoT (оператор
+// режет plain DNS). Остальное (QUIC/443 и др.) — напрямую, иначе браузеры
+// зависают на QUIC без фолбэка и "интернета нет".
 func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	defer conn.Close()
 	id := conn.ID()
 	atomic.AddInt64(&udpTry, 1)
-	if id.LocalPort != 53 {
-		return
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(8 * time.Second))
-	buf := make([]byte, 4096)
+	isDNS := id.LocalPort == 53
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 64*1024)
 	n, err := conn.Read(buf)
 	if err != nil || n <= 0 {
 		return
 	}
-	ans, err := resolveDNS(buf[:n])
-	if err != nil {
-		setErr(err)
+
+	if isDNS {
+		ans, err := resolveDNS(buf[:n])
+		if err != nil {
+			setErr(err)
+			return
+		}
+		atomic.AddInt64(&udpCount, 1)
+		_, _ = conn.Write(ans)
 		return
 	}
-	atomic.AddInt64(&udpCount, 1)
-	_, _ = conn.Write(ans)
+
+	// QUIC и прочий UDP: прямой релей в апстрим (dst из заголовка потока)
+	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
+	up, err := dialUDP(dst)
+	if err != nil {
+		return
+	}
+	defer up.Close()
+	if _, err := up.Write(buf[:n]); err != nil {
+		return
+	}
+	_ = up.SetReadDeadline(time.Now().Add(30 * time.Second))
+	rbuf := make([]byte, 64*1024)
+	for {
+		rn, err := up.Read(rbuf)
+		if err != nil || rn <= 0 {
+			return
+		}
+		if _, err := conn.Write(rbuf[:rn]); err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = up.SetReadDeadline(time.Now().Add(30 * time.Second))
+	}
 }
