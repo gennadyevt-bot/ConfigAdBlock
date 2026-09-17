@@ -186,7 +186,7 @@ class MainActivity : AppCompatActivity() {
             else -> "ВКЛЮЧИТЬ"
         }
         val logText = prefs.getString("log", "") ?: ""
-        val lc = "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0)
+        val lc = "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
         val eerr = prefs.getString("eng_err", "") ?: ""
         val st = prefs.getString("selftest", "") ?: ""
         val pst = prefs.getString("proxy_state", "") ?: ""
