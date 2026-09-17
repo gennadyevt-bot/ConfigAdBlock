@@ -184,6 +184,9 @@ class MainActivity : AppCompatActivity() {
         err.text = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
+                // ВАЖНО: никаких прямых вызовов mitm.* здесь — только prefs.
+                // Прямой gomobile-вызов с главного потока блокирует UI,
+                // если движок подвис (кнопки "заедали" именно поэтому).
                 if (prefs.getBoolean("https_mode", false)) base + (if (vpna.isNotEmpty()) " (" + vpna + ")" else "") + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
                 else base
             }
