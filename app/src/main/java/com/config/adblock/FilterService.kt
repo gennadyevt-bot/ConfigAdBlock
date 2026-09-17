@@ -306,6 +306,15 @@ class FilterService : VpnService() {
             }
             try { getSharedPreferences("stats", MODE_PRIVATE).edit().putString("lasterr", "").apply() } catch (_: Exception) {}
             tun = pfd
+            try { saveErr("allowBypass=" + b.allowsBypass()) } catch (_: Exception) {}
+            try {
+                val myUid = applicationInfo.uid
+                saveErr("our uid=" + myUid)
+                try {
+                    val ci = packageManager.getApplicationInfo("com.android.chrome", 0)
+                    saveErr("chrome uid=" + ci.uid + (if (ci.uid == myUid) " (тот же профиль)" else " (ДРУГОЙ профиль!)"))
+                } catch (e: Exception) { saveErr("chrome: не найден") }
+            } catch (_: Exception) {}
             // явная защита сокетов движка (VPN bypass) + отладочный режим
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
@@ -353,6 +362,7 @@ class FilterService : VpnService() {
                         .putString("eng_err", mitm.Mitm.lastErr())
                         .putString("selftest", mitm.Mitm.selfTestResult())
                         .putString("flowlog", mitm.Mitm.flowLog())
+                        .putString("stackstats", mitm.Mitm.stackStats())
                         .putLong("gp_ok", mitm.Mitm.gpOkExt())
                         .putLong("gp_fail", mitm.Mitm.gpFailExt())
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
