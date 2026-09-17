@@ -18,6 +18,15 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
+// dohHandler реализует goproxy.HttpsHandler для прямого туннелирования.
+type dohHandler struct {
+	action *goproxy.ConnectAction
+}
+
+func (h dohHandler) HandleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+	return h.action, host
+}
+
 const proxyBindAll = "127.0.0.1:0"
 
 // proxyCur — реальный адрес прокси (порт выбирается ОС на каждый старт:
@@ -151,15 +160,19 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	// для IP-литералов (1.1.1.1 и т.п.) -> DoH мёртв -> браузер не может
 	// резолвить -> "не удаётся открыть веб-страницу". Туннелируем их
 	// напрямую (настоящие сертификаты), фильтруем весь остальной трафик.
+	dohHosts := map[string]bool{
+		"1.1.1.1": true, "1.0.0.1": true, "8.8.8.8": true, "8.8.4.4": true,
+		"9.9.9.9": true, "149.112.112.112": true,
+		"77.88.8.8": true, "77.88.8.1": true,
+		"94.140.14.14": true, "94.140.15.15": true,
+		"dns.google": true, "mozilla.cloudflare-dns.com": true,
+		"cloudflare-dns.com": true, "dns.adguard-dns.com": true,
+		"common.dot.dns.yandex.net": true,
+	}
 	dohAccept := &goproxy.ConnectAction{Action: goproxy.ConnectAccept}
-	g.OnRequest(goproxy.DstHostIs(
-		"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
-		"77.88.8.8", "77.88.8.1", "94.140.14.14", "94.140.15.15",
-		"dns.google", "mozilla.cloudflare-dns.com", "cloudflare-dns.com",
-		"dns.adguard-dns.com", "common.dot.dns.yandex.net",
-	)).HandleConnect(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
-		return dohAccept, host
-	})
+	g.OnRequest(goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
+		return dohHosts[req.URL.Hostname()]
+	})).HandleConnect(dohHandler{action: dohAccept})
 
 	g.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		if isBlocked(req.Host) {
