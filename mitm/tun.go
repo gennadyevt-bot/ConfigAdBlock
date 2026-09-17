@@ -89,6 +89,14 @@ func dialTCP(addr string) (net.Conn, error) {
 	return d.Dial("tcp", addr)
 }
 
+// dialLocal — для 127.0.0.1: protect не нужен (loopback не идёт через
+// VPN), а Java-колбэк protect() был кандидатом на вечный стопор
+// 443-потоков после →gp-enter.
+func dialLocal(addr string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 10 * time.Second}
+	return d.Dial("tcp", addr)
+}
+
 func dialUDP(addr string) (net.Conn, error) {
 	d := net.Dialer{Timeout: 4 * time.Second, Control: protectedControl()}
 	return d.Dial("udp", addr)
@@ -284,7 +292,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	flowLog(hp + "→gp-enter")
-	g, err := dialTCP(proxyCurAddr())
+	g, err := dialLocal(proxyCurAddr())
 	if err != nil {
 		setErr(fmt.Errorf("dial goproxy %s: %w", proxyCurAddr(), err))
 		atomic.AddInt64(&gpDial, 1)
