@@ -30,8 +30,8 @@ func (h dohHandler) HandleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.
 
 const proxyBindAll = "127.0.0.1:0"
 
-// mitmCfg — tls.Config с GetCertificate нашего CA (для собственного MITM).
-var mitmCfg *tls.Config
+// mitmCfgFunc — фабрика tls.Config с GetCertificate нашего CA.
+var mitmCfgFunc func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error)
 
 // proxyCur — реальный адрес прокси (порт выбирается ОС на каждый старт:
 // зомби-процесс на фиксированном 8080 больше не мешает).
@@ -148,7 +148,7 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	stage(filesDir, "C: blocklist loaded")
 
 	tlsCfg := goproxy.TLSConfigFromCA(&ca)
-	mitmCfg = tlsCfg // наш собственный 443-пайплайн (tun.go) использует тот же CA
+	mitmCfgFunc = tlsCfg // наш собственный 443-пайплайн (tun.go) использует тот же CA
 	// КЛЮЧЕВОЕ: OkConnect — действие по умолчанию для ВСЕХ CONNECT-ов.
 	// ConnectAccept = голый туннель без расшифровки (фильтр не видит
 	// трафик — так было и реклама шла мимо). ConnectMitm = расшифровка
