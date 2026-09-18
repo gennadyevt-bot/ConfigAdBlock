@@ -284,7 +284,10 @@ class FilterService : VpnService() {
                 // IPv6 НЕ перехватываем: стек v4-only, а заворачивать v6
                 // в чёрную дыру = убить v6-DNS и фолбэки (DNS_PROBE).
                 // Пусть v6 идёт мимо, как без VPN.
-                .addDnsServer("10.0.0.2")
+                // addDnsServer сознательно НЕ в цепочке: в режиме «только
+                // браузеры» VPN-DNS отравил бы резолвер ВСЕХ приложений
+                // (не-allowed физически не достигают 10.0.0.2). Ставим его
+                // только в ветке «все приложения» ниже.
             // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
             // остальные приложения гарантированно работают вне туннеля
             // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
@@ -313,6 +316,9 @@ class FilterService : VpnService() {
                 saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
                 saveErr("disallowed calls=0")
             } else {
+                // VPN-DNS нужен только в полном режиме (там движок отвечает
+                // на 53-й порт). Браузеры в browser-only ходят своим DoH.
+                try { b.addDnsServer("10.0.0.2") } catch (_: Exception) {}
                 // само-исключение ТОЛЬКО здесь, в ветке «все приложения»
                 try { b.addDisallowedApplication(packageName) } catch (_: Exception) {}
                 applyExclusions(b)
