@@ -291,11 +291,17 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 // handle443 вынесен отдельно, чтобы перехватить панику: gVisor молча
 // глотает паники в обработчиках (72 потока исчезали бесследно).
 // Счётчики этапов собственного MITM-пайплайна (матрица диагностики).
+// cliTLSFail — ТОЛЬКО реальные ошибки (alert/таймаут/обрыв до байт).
+// cliTLSRace — бенigner обрыв: клиент прислал >=1 байт и корректно закрыл
+// соединение посреди рукопожатия (Chrome гоняет параллельные коннекты
+// и закрывает проигравшие). EOF после успешной передачи данных — normalEOF.
 var (
 	cliHello   int64
 	dohPassN   int64
 	cliTLSOk   int64
 	cliTLSFail int64
+	cliTLSRace int64
+	acceptedN  int64
 	upDialOk   int64
 	upDialFail int64
 	upTLSOk    int64
@@ -303,14 +309,22 @@ var (
 	httpReqN   int64
 	httpRespN  int64
 	blockedN   int64
+	c2uBytes   int64
+	u2cBytes   int64
+	normalEOF  int64
 )
 
 func MitmStats() string {
-	return "tls " + strconv.FormatInt(atomic.LoadInt64(&cliTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&cliTLSFail), 10) +
+	return "acc " + strconv.FormatInt(atomic.LoadInt64(&acceptedN), 10) +
+		" tls " + strconv.FormatInt(atomic.LoadInt64(&cliTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&cliTLSFail), 10) +
+		" race " + strconv.FormatInt(atomic.LoadInt64(&cliTLSRace), 10) +
 		" up " + strconv.FormatInt(atomic.LoadInt64(&upDialOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upDialFail), 10) +
 		" utls " + strconv.FormatInt(atomic.LoadInt64(&upTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upTLSFail), 10) +
 		" http " + strconv.FormatInt(atomic.LoadInt64(&httpReqN), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&httpRespN), 10) +
-		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10)
+		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10) +
+		" c2u " + strconv.FormatInt(atomic.LoadInt64(&c2uBytes), 10) +
+		" u2c " + strconv.FormatInt(atomic.LoadInt64(&u2cBytes), 10) +
+		" eofOK " + strconv.FormatInt(atomic.LoadInt64(&normalEOF), 10)
 }
 
 // Своя фабрика сертификатов хостов (вместо goproxy TLSConfigFromCA —
@@ -516,6 +530,22 @@ func (c *countingConn) Read(b []byte) (int, error) {
 	return m, err
 }
 
+// countWriter считает байты, реально записанные в направлении
+// клиент→апстрим (c2uBytes) или апстрим→клиент (u2cBytes). Ответ на
+// вопрос GPT «передаются ли данные в обе стороны».
+type countWriter struct {
+	w io.Writer
+	n *int64
+}
+
+func (c countWriter) Write(b []byte) (int, error) {
+	m, err := c.w.Write(b)
+	if m > 0 {
+		atomic.AddInt64(c.n, int64(m))
+	}
+	return m, err
+}
+
 // handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
 // наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
@@ -527,6 +557,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	flowLog(hp + "→mitm")
+	atomic.AddInt64(&acceptedN, 1)
 	hostOnly := hp
 	if i := strings.LastIndex(hp, ":"); i > 0 {
 		hostOnly = hp[:i]
@@ -561,11 +592,21 @@ func handle443(conn adapter.TCPConn, hp string) {
 	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
 	atomic.AddInt64(&cliHello, 1)
 	if err := tlsConn.Handshake(); err != nil {
+		gb := atomic.LoadInt64(&gotBytes)
+		if errors.Is(err, io.EOF) && gb > 0 {
+			// БЕНigner race: клиент прислал данные и корректно закрыл
+			// соединение посреди рукопожатия. Chrome гоняет параллельные
+			// коннекты и закрывает проигравшие — это НЕ ошибка сертификата
+			// и не ошибка сети. Не трогаем ERR-строку.
+			atomic.AddInt64(&cliTLSRace, 1)
+			flowLog(fmt.Sprintf("%s→cliTLSrace(%dB)", hp, gb))
+			return
+		}
 		atomic.AddInt64(&cliTLSFail, 1)
 		// bytes=0 + timeout => клиент просто молчит (не дело сертификата);
-		// bytes>0 + unknown certificate => дело доверия CA (GPT-развилка)
-		setErr(fmt.Errorf("cliTLS %s bytes=%d: %w", hp, atomic.LoadInt64(&gotBytes), err))
-		flowLog(fmt.Sprintf("%s→cliTLSfail(%dB)", hp, atomic.LoadInt64(&gotBytes)))
+		// bytes>0 + alert unknown certificate => дело доверия CA
+		setErr(fmt.Errorf("cliTLS %s bytes=%d: %w", hp, gb, err))
+		flowLog(fmt.Sprintf("%s→cliTLSfail(%dB)", hp, gb))
 		return
 	}
 	atomic.AddInt64(&cliTLSOk, 1)
@@ -575,6 +616,16 @@ func handle443(conn adapter.TCPConn, hp string) {
 	for {
 		req, err := http.ReadRequest(br)
 		if err != nil {
+			// EOF (клиент закрыл уже обслуженное/пустое соединение) —
+			// нормальное завершение, не ошибка. Реальные ошибки чтения
+			// (обрыв посреди заголовков) сюда же попадают, но с err != EOF.
+			if errors.Is(err, io.EOF) || strings.HasSuffix(err.Error(), "EOF") {
+				atomic.AddInt64(&normalEOF, 1)
+				flowLog(hp + "→eofOK")
+			} else {
+				setErr(fmt.Errorf("cliRead %s: %w", hp, err))
+				flowLog(hp + "→cliReadX")
+			}
 			return
 		}
 		atomic.AddInt64(&httpReqN, 1)
@@ -586,7 +637,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			atomic.AddInt64(&blockedN, 1)
 			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
 			resp.Header.Set("Content-Type", "text/html")
-			_ = resp.Write(tlsConn)
+			_ = resp.Write(countWriter{w: tlsConn, n: &u2cBytes})
 			return
 		}
 		serverName := strings.Split(host, ":")[0]
@@ -632,7 +683,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		req.Header.Del("Proxy-Connection")
 		req.Header.Del("Proxy-Authenticate")
 		req.Header.Del("Proxy-Authorization")
-		if err := req.Write(upTLS); err != nil {
+		if err := req.Write(countWriter{w: upTLS, n: &c2uBytes}); err != nil {
 			_ = up.Close()
 			return
 		}
@@ -645,7 +696,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		}
 		atomic.AddInt64(&httpRespN, 1)
 		resp = filterHTML(resp)
-		werr := resp.Write(tlsConn)
+		werr := resp.Write(countWriter{w: tlsConn, n: &u2cBytes})
 		_ = resp.Body.Close() // явное закрытие: без него течёт апстрим-TLS
 		_ = up.Close()
 		if werr != nil {
@@ -656,7 +707,8 @@ func handle443(conn adapter.TCPConn, hp string) {
 }
 
 func write502(w io.Writer) {
-	_, _ = io.WriteString(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+	// учитываем 502 в u2cBytes: это тоже байты апстрим→клиент
+	_, _ = io.WriteString(countWriter{w: w, n: &u2cBytes}, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 }
 
 // DNS через DNS-over-HTTPS: операторы РФ перехватывают/глушет plain
