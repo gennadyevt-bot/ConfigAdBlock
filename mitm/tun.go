@@ -243,7 +243,14 @@ var (
 	gpDial     int64
 	t443seen   int64
 	quicRelays int64
+	quicDrops  int64
+	udpSeen    int64
 )
+
+// UdpSeen/QuicDrops — наблюдаемость UDP (диагностика GPT: весь UDP
+// браузера логируется построчно, UDP/443 роняем для отката на TCP).
+func UdpSeen() int64   { return atomic.LoadInt64(&udpSeen) }
+func QuicDrops() int64 { return atomic.LoadInt64(&quicDrops) }
 
 func T443Seen() int64   { return atomic.LoadInt64(&t443seen) }
 func QuicRelays() int64 { return atomic.LoadInt64(&quicRelays) }
@@ -272,14 +279,14 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 
 	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
 	if port != 443 || direct443On() {
+		atomic.AddInt64(&directCnt, 1)
+		flowLog(fmt.Sprintf("tcp dst=%s direct", hp))
 		up, err := dialTCP(hp)
 		if err != nil {
 			setErr(fmt.Errorf("direct %s: %w", hp, err))
 			flowLog(hp + "→dirX")
 			return
 		}
-		atomic.AddInt64(&directCnt, 1)
-		flowLog(hp + "→dir")
 		relay(conn, up)
 		return
 	}
@@ -1030,8 +1037,17 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		return
 	}
 
-	// ДИАГНОСТИКА (GPT): временно роняем QUIC — браузер обязан уйти на TCP/443
+	// ВСЕ UDP-потоки — в журнал одной строкой с dst (диагностика GPT:
+	// где именно ходит браузер, ничего не пропуская мимо наблюдения).
+	// Счётчики: udpTry = ВСЕ UDP-пакеты, udpSeen = уникальные потоки UDP.
+	atomic.AddInt64(&udpSeen, 1)
+	flowLog(fmt.Sprintf("udp dst=%s:%d", id.LocalAddress.String(), id.LocalPort))
+
+	// UDP/443 (QUIC/HTTP3): НЕ пропускаем напрямую — иначе рекламный
+	// трафик уходит по HTTP/3 МИМО MITM (тракт TLS+HTTP его не видит).
+	// Браузер откатывается на TCP/443 -> уже рабочий MITM-пайплайн.
 	if id.LocalPort == 443 {
+		atomic.AddInt64(&quicDrops, 1)
 		return
 	}
 	// прочий UDP: прямой релей в апстрим (dst из заголовка потока)
