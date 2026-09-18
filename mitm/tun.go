@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/ecdsa"
 	"bufio"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
@@ -315,6 +316,49 @@ func MitmStats() string {
 // Своя фабрика сертификатов хостов (вместо goproxy TLSConfigFromCA —
 // та паниковала на nil ctx). Подписываем нашим CA, кэшируем по имени,
 // для IP-литералов кладём IP в SAN.
+// caInfoStr / leafVerifyStr — вывод на экран для сверки отпечатков (GPT).
+var (
+	caInfoStr   string
+	leafVerifyStr string
+)
+
+func CaInfo() string   { return caInfoStr }
+func LeafVerify() string { return leafVerifyStr }
+
+// verifyLeafSelfTest: генерируем тестовый leaf и проверяем цепочку
+// до нашего CA так, как это делал бы клиент (issuer, SAN, срок, подпись).
+func verifyLeafSelfTest() {
+	mitmCAMu.Lock()
+	caX := mitmCAX509
+	mitmCAMu.Unlock()
+	if caX == nil {
+		leafVerifyStr = "leaf: нет CA"
+		return
+	}
+	leaf, err := certForName("selftest.local")
+	if err != nil {
+		leafVerifyStr = "leaf: генерация FAIL: " + err.Error()
+		return
+	}
+	lc, err := x509.ParseCertificate(leaf.Certificate[0])
+	if err != nil {
+		leafVerifyStr = "leaf: парсинг FAIL"
+		return
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(caX)
+	opts := x509.VerifyOptions{
+		DNSName:   "selftest.local",
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if _, err := lc.Verify(opts); err != nil {
+		leafVerifyStr = "leaf: ПРОВЕРКА FAIL: " + err.Error()
+		return
+	}
+	leafVerifyStr = "leaf: OK"
+}
+
 var (
 	mitmCAMu   sync.Mutex
 	mitmCACert *tls.Certificate
@@ -331,6 +375,13 @@ func setMITMCA(cert tls.Certificate, x509cert *x509.Certificate) {
 	certCacheMu.Lock()
 	certCache = map[string]*tls.Certificate{}
 	certCacheMu.Unlock()
+	// инфо на экран: subject + sha256 + срок — для сверки с установленным
+	// в системе сертификатом (исключаем рассинхрон CA №1 vs CA №2)
+	fp := sha256.Sum256(x509cert.Raw)
+	caInfoStr = "CA: " + x509cert.Subject.CommonName +
+		" sha256:" + fmt.Sprintf("%X", fp)[:16] +
+		" до:" + x509cert.NotAfter.Format("2006-01-02")
+	verifyLeafSelfTest()
 }
 
 func certForName(name string) (*tls.Certificate, error) {
