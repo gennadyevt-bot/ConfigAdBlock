@@ -231,8 +231,8 @@ var (
 func flowLog(s string) {
 	flowMu.Lock()
 	flowRing = append(flowRing, s)
-	if len(flowRing) > 16 {
-		flowRing = flowRing[len(flowRing)-16:]
+	if len(flowRing) > 80 {
+		flowRing = flowRing[len(flowRing)-80:]
 	}
 	flowMu.Unlock()
 }
@@ -546,18 +546,26 @@ func (c countWriter) Write(b []byte) (int, error) {
 	return m, err
 }
 
+// flowSeq — сквозной ID TCP:443 потока: каждое соединение логирует
+// свой жизненный цикл строками "#ID ..." — по требованию GPT одна
+// строка на этап: accepted / cliTLS / req+filter / upDial / upTLS / close.
+var flowSeq int64
+
 // handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
 // наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
+	fid := atomic.AddInt64(&flowSeq, 1)
+	closeReason := "?"
 	defer func() {
 		if r := recover(); r != nil {
 			setErr(fmt.Errorf("PANIC 443 %s: %v", hp, r))
-			flowLog(hp + "→PANIC")
+			flowLog(fmt.Sprintf("#%d PANIC %v", fid, r))
 		}
+		flowLog(fmt.Sprintf("#%d close=%s", fid, closeReason))
 		_ = conn.Close()
 	}()
-	flowLog(hp + "→mitm")
 	atomic.AddInt64(&acceptedN, 1)
+	flowLog(fmt.Sprintf("#%d dst=%s accepted", fid, hp))
 	hostOnly := hp
 	if i := strings.LastIndex(hp, ":"); i > 0 {
 		hostOnly = hp[:i]
@@ -567,20 +575,24 @@ func handle443(conn adapter.TCPConn, hp string) {
 	if DoHHosts[hostOnly] {
 		up, err := dialTCP(hp)
 		if err != nil {
-			flowLog(hp + "→dohX")
+			flowLog(fmt.Sprintf("#%d dohDial FAIL %v", fid, err))
+			closeReason = "dohDialX"
 			return
 		}
 		atomic.AddInt64(&dohPassN, 1)
-		flowLog(hp + "→dohPass")
+		flowLog(fmt.Sprintf("#%d dohPass relay", fid))
+		closeReason = "relay"
 		relay(conn, up)
 		return
 	}
+	var sni string
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"http/1.1"}, // только HTTP/1.1: h2 мы не говорим,
 		// иначе бинарный preface "PRI * HTTP/2.0" не парсится http.ReadRequest
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			name := hello.ServerName
+			sni = hello.ServerName
+			name := sni
 			if name == "" {
 				name = hostOnly
 			}
@@ -599,32 +611,44 @@ func handle443(conn adapter.TCPConn, hp string) {
 			// коннекты и закрывает проигравшие — это НЕ ошибка сертификата
 			// и не ошибка сети. Не трогаем ERR-строку.
 			atomic.AddInt64(&cliTLSRace, 1)
-			flowLog(fmt.Sprintf("%s→cliTLSrace(%dB)", hp, gb))
+			flowLog(fmt.Sprintf("#%d cliTLS race(%dB)", fid, gb))
+			closeReason = "race"
 			return
 		}
 		atomic.AddInt64(&cliTLSFail, 1)
 		// bytes=0 + timeout => клиент просто молчит (не дело сертификата);
 		// bytes>0 + alert unknown certificate => дело доверия CA
 		setErr(fmt.Errorf("cliTLS %s bytes=%d: %w", hp, gb, err))
-		flowLog(fmt.Sprintf("%s→cliTLSfail(%dB)", hp, gb))
+		flowLog(fmt.Sprintf("#%d cliTLS FAIL(%dB) sni=%q err=%v", fid, gb, sni, err))
+		closeReason = "cliTLSfail"
 		return
 	}
 	atomic.AddInt64(&cliTLSOk, 1)
 	_ = tlsConn.SetDeadline(time.Time{})
-	flowLog(hp + "→cliTLSok")
+	flowLog(fmt.Sprintf("#%d cliTLS ok sni=%q", fid, sni))
+	closeReason = "cliClose"
 	br := bufio.NewReader(tlsConn)
 	for {
 		req, err := http.ReadRequest(br)
 		if err != nil {
-			// EOF (клиент закрыл уже обслуженное/пустое соединение) —
-			// нормальное завершение, не ошибка. Реальные ошибки чтения
-			// (обрыв посреди заголовков) сюда же попадают, но с err != EOF.
-			if errors.Is(err, io.EOF) || strings.HasSuffix(err.Error(), "EOF") {
+			es := err.Error()
+			switch {
+			case errors.Is(err, io.EOF) || strings.HasSuffix(es, "EOF"):
+				// клиент закрыл соединение, ничего не запросив
 				atomic.AddInt64(&normalEOF, 1)
-				flowLog(hp + "→eofOK")
-			} else {
+				flowLog(fmt.Sprintf("#%d cli EOF no-req", fid))
+				closeReason = "eof"
+			case strings.Contains(es, "aborted"), strings.Contains(es, "closed"),
+				strings.Contains(es, "reset by peer"), strings.Contains(es, "connection reset"):
+				// Chrome резко закрыл неиспользованное/preconnect-соединение.
+				// Норма для параллельных коннектов — НЕ ошибка тракта.
+				atomic.AddInt64(&normalEOF, 1)
+				flowLog(fmt.Sprintf("#%d cli aborted idle/preconnect", fid))
+				closeReason = "cliAbort"
+			default:
 				setErr(fmt.Errorf("cliRead %s: %w", hp, err))
-				flowLog(hp + "→cliReadX")
+				flowLog(fmt.Sprintf("#%d cliRead FAIL err=%v", fid, err))
+				closeReason = "cliReadX"
 			}
 			return
 		}
@@ -633,18 +657,25 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if host == "" {
 			continue
 		}
+		path := req.URL.Path
+		if len(path) > 60 {
+			path = path[:60]
+		}
 		if isBlocked(host) {
 			atomic.AddInt64(&blockedN, 1)
+			flowLog(fmt.Sprintf("#%d req host=%s path=%s FILTER=BLOCK", fid, host, path))
 			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
 			resp.Header.Set("Content-Type", "text/html")
 			_ = resp.Write(countWriter{w: tlsConn, n: &u2cBytes})
+			closeReason = "blocked"
 			return
 		}
+		flowLog(fmt.Sprintf("#%d req host=%s path=%s FILTER=allow", fid, host, path))
 		serverName := strings.Split(host, ":")[0]
 
-		// ФИКС: апстрим — по ИСХОДНОМУ IP назначения из TUN (hp).
-		// DNS не используем: браузер уже резолвил этот IP сам, а резолвер
-		// gomobile в VPN-контексте системного resolv.conf не видит.
+		// Апстрим — по ИСХОДНОМУ IP назначения из TUN (hp). DNS не нужен:
+		// браузер уже резолвил этот IP, а резолвер gomobile системного
+		// resolv.conf в VPN-контексте не видит.
 		up, err := dialTCP(hp)
 		if err != nil {
 			// Резерв: DoT-резолв имени из Host (тот же путь, что у самотеста)
@@ -652,27 +683,35 @@ func handle443(conn adapter.TCPConn, hp string) {
 			if lerr != nil {
 				atomic.AddInt64(&upDialFail, 1)
 				setErr(fmt.Errorf("upDial %s: %v / %v", hp, err, lerr))
+				flowLog(fmt.Sprintf("#%d upDial FAIL %v/%v", fid, err, lerr))
 				write502(tlsConn)
+				closeReason = "upDialX"
 				return
 			}
 			up, err = dialTCP(net.JoinHostPort(ip, "443"))
 			if err != nil {
 				atomic.AddInt64(&upDialFail, 1)
 				setErr(fmt.Errorf("upDial %s: %w", hp, err))
+				flowLog(fmt.Sprintf("#%d upDial FAIL %v", fid, err))
 				write502(tlsConn)
+				closeReason = "upDialX"
 				return
 			}
 		}
 		atomic.AddInt64(&upDialOk, 1)
+		flowLog(fmt.Sprintf("#%d upDial ok %s", fid, hp))
 		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
 		if err := upTLS.Handshake(); err != nil {
 			atomic.AddInt64(&upTLSFail, 1)
 			setErr(fmt.Errorf("upTLS %s: %w", serverName, err))
+			flowLog(fmt.Sprintf("#%d upTLS FAIL %v", fid, err))
 			_ = up.Close()
 			write502(tlsConn)
+			closeReason = "upTLSX"
 			return
 		}
 		atomic.AddInt64(&upTLSOk, 1)
+		flowLog(fmt.Sprintf("#%d upTLS ok", fid))
 		req.URL.Scheme = "https"
 		if strings.Contains(host, ":") {
 			req.URL.Host = host
@@ -684,14 +723,18 @@ func handle443(conn adapter.TCPConn, hp string) {
 		req.Header.Del("Proxy-Authenticate")
 		req.Header.Del("Proxy-Authorization")
 		if err := req.Write(countWriter{w: upTLS, n: &c2uBytes}); err != nil {
+			flowLog(fmt.Sprintf("#%d reqWrite FAIL %v", fid, err))
 			_ = up.Close()
+			closeReason = "reqWriteX"
 			return
 		}
 		resp, err := http.ReadResponse(bufio.NewReader(upTLS), req)
 		if err != nil {
 			_ = up.Close()
 			setErr(fmt.Errorf("upRead %s: %w", serverName, err))
+			flowLog(fmt.Sprintf("#%d upRead FAIL %v", fid, err))
 			write502(tlsConn)
+			closeReason = "upReadX"
 			return
 		}
 		atomic.AddInt64(&httpRespN, 1)
@@ -700,8 +743,12 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = resp.Body.Close() // явное закрытие: без него течёт апстрим-TLS
 		_ = up.Close()
 		if werr != nil {
+			flowLog(fmt.Sprintf("#%d respWrite FAIL %v", fid, werr))
+			closeReason = "respWriteX"
 			return
 		}
+		flowLog(fmt.Sprintf("#%d resp %d ok", fid, resp.StatusCode))
+		closeReason = "done"
 		return // один запрос = одно соединение; Chrome открывает потоки параллельно
 	}
 }
