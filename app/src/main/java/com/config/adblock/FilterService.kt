@@ -290,10 +290,6 @@ class FilterService : VpnService() {
                 // только в ветке «все приложения» ниже.
             // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
             // остальные приложения гарантированно работают вне туннеля
-            val noMitmDbg = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
-            // единая строка активной конфигурации (GPT: галочки vs реальный VPN)
-            getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
-                "MODE=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL") + "+" + (if (noMitmDbg) "DIRECT" else "MITM")).apply()
             // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
             // пока галочку не трогаешь, pref не существует и режим молча
             // оставался «все приложения». Теперь дефолт везде true.
@@ -319,6 +315,9 @@ class FilterService : VpnService() {
                 }
                 saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
                 saveErr("disallowed calls=0")
+                val noMitmDbg0 = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
+                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
+                    "MODE=BROWSER_ONLY+" + (if (noMitmDbg0) "DIRECT" else "MITM")).apply()
             } else {
                 // VPN-DNS нужен только в полном режиме (там движок отвечает
                 // на 53-й порт). Браузеры в browser-only ходят своим DoH.
@@ -326,6 +325,9 @@ class FilterService : VpnService() {
                 // само-исключение ТОЛЬКО здесь, в ветке «все приложения»
                 try { b.addDisallowedApplication(packageName) } catch (_: Exception) {}
                 applyExclusions(b)
+                val noMitmDbg1 = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
+                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
+                    "MODE=ALL+" + (if (noMitmDbg1) "DIRECT" else "MITM")).apply()
                 saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
             }
             var tries = 0
