@@ -9,7 +9,6 @@ import (
 	"crypto/elliptic"
 	"crypto/ecdsa"
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
@@ -684,6 +683,36 @@ func resolveDoH(query []byte) ([]byte, error) {
 		last = errors.New("DoH: нет эндпоинтов")
 	}
 	return nil, last
+}
+
+// Апстримы, доступные из РФ: AdGuard DNS и Яндекс.
+var udpUpstreams = []string{"94.140.14.14:53", "77.88.8.8:53", "8.8.8.8:53"}
+
+// Кэш DNS-ответов: снижает зависимость от живости апстримов в конкретную секунду.
+var (
+	dnsCacheMu sync.Mutex
+	dnsCache   = map[string][]byte{}
+	dnsCacheN  int
+)
+
+func dnsCacheGet(key string) ([]byte, bool) {
+	dnsCacheMu.Lock()
+	defer dnsCacheMu.Unlock()
+	v, ok := dnsCache[key]
+	return v, ok
+}
+
+func dnsCachePut(key string, v []byte) {
+	dnsCacheMu.Lock()
+	defer dnsCacheMu.Unlock()
+	if dnsCacheN > 2048 {
+		dnsCache = map[string][]byte{}
+		dnsCacheN = 0
+	}
+	cp := make([]byte, len(v))
+	copy(cp, v)
+	dnsCache[key] = cp
+	dnsCacheN++
 }
 
 // resolveDoT: DNS-over-TLS (порт 853). Оператор режет plain UDP 53 —
