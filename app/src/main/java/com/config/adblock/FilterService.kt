@@ -290,6 +290,10 @@ class FilterService : VpnService() {
                 // только в ветке «все приложения» ниже.
             // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
             // остальные приложения гарантированно работают вне туннеля
+            val noMitmDbg = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
+            // единая строка активной конфигурации (GPT: галочки vs реальный VPN)
+            getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
+                "MODE=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL") + "+" + (if (noMitmDbg) "DIRECT" else "MITM")).apply()
             // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
             // пока галочку не трогаешь, pref не существует и режим молча
             // оставался «все приложения». Теперь дефолт везде true.
@@ -426,6 +430,8 @@ class FilterService : VpnService() {
                         .putString("mitmstats", mitm.Mitm.mitmStats())
                         .putString("cainfo", mitm.Mitm.caInfo())
                         .putString("leafverify", mitm.Mitm.leafVerify())
+                        .putLong("dir_tx", mitm.Mitm.dirTx())
+                        .putLong("dir_rx", mitm.Mitm.dirRx())
                         .apply()
                 } catch (e: Exception) { break }
             }
