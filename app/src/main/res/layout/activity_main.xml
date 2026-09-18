@@ -79,6 +79,19 @@
         android:textColor="@color/white_bg"
         android:buttonTint="@color/white_bg"
         android:layout_marginTop="4dp" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnResetCa"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="СБРОСИТЬ СЕРТИФИКАТ"
+        android:textSize="13sp"
+        android:backgroundTint="#FFD54F"
+        android:textColor="@color/green_primary"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:layout_marginTop="8dp" />
     <com.google.android.material.checkbox.MaterialCheckBox
         android:id="@+id/chkNoMitm"
         android:layout_width="wrap_content"
