@@ -285,7 +285,6 @@ class FilterService : VpnService() {
                 // в чёрную дыру = убить v6-DNS и фолбэки (DNS_PROBE).
                 // Пусть v6 идёт мимо, как без VPN.
                 .addDnsServer("10.0.0.2")
-                .addDisallowedApplication(packageName)
             // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
             // остальные приложения гарантированно работают вне туннеля
             // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
@@ -306,11 +305,16 @@ class FilterService : VpnService() {
                     }
                 }
                 if (cnt == 0) {
-                    saveErr("allowed пуст! Chrome/Яндекс не добавлены — проверь установку")
-                } else {
-                    saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
+                    // по требованию GPT: молчаливый фолбэк на VPN всех
+                    // приложений ЗАПРЕЩЁН — лучше не поднимать туннель
+                    saveErr("allowed пуст — establish ОТМЕНЁН (безопасность)")
+                    return
                 }
+                saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
+                saveErr("disallowed calls=0")
             } else {
+                // само-исключение ТОЛЬКО здесь, в ветке «все приложения»
+                try { b.addDisallowedApplication(packageName) } catch (_: Exception) {}
                 applyExclusions(b)
                 saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
             }
