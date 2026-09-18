@@ -223,7 +223,6 @@ class FilterService : VpnService() {
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("10.0.0.2")
-            applyExclusions(b)
             val p = b.establish()
             if (p == null) { saveErr("ПУСТОЙ: establish вернул null"); return }
             tun = p
@@ -299,7 +298,7 @@ class FilterService : VpnService() {
                     try {
                         b.addAllowedApplication(pkg)
                         val uid = try { packageManager.getApplicationInfo(pkg, 0).uid } catch (_: Exception) { -1 }
-                        saveErr("allowed: " + pkg + " uid=" + uid)
+                        saveErr("allowed OK: " + pkg + " uid=" + uid)
                         cnt++
                     } catch (e: Exception) {
                         // ПРИЧИНА обязана быть видна — иначе диагностика слепая
@@ -307,9 +306,7 @@ class FilterService : VpnService() {
                     }
                 }
                 if (cnt == 0) {
-                    // запасной путь: allowed пуст = все через VPN, исключаем себя
-                    saveErr("allowed пуст — фолбэк на режим всех приложений")
-                    b.addDisallowedApplication(packageName)
+                    saveErr("allowed пуст! Chrome/Яндекс не добавлены — проверь установку")
                 } else {
                     saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
                 }
