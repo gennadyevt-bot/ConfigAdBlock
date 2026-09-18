@@ -417,6 +417,8 @@ class FilterService : VpnService() {
                         .putLong("t443", mitm.Mitm.t443Seen())
                         .putLong("quic", mitm.Mitm.quicRelays())
                         .putString("mitmstats", mitm.Mitm.mitmStats())
+                        .putString("cainfo", mitm.Mitm.caInfo())
+                        .putString("leafverify", mitm.Mitm.leafVerify())
                         .apply()
                 } catch (e: Exception) { break }
             }
