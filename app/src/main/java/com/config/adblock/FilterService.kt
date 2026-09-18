@@ -287,8 +287,19 @@ class FilterService : VpnService() {
                 // Пусть v6 идёт мимо, как без VPN.
                 .addDnsServer("10.0.0.2")
                 .addDisallowedApplication(packageName)
-            applyExclusions(b)
-            saveErr("исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
+            // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
+            // остальные приложения гарантированно работают вне туннеля
+            val browsersOnly = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("browsers_only", false) } catch (_: Exception) { false }
+            if (browsersOnly) {
+                var cnt = 0
+                for (pkg in listOf("com.android.chrome", "com.yandex.browser")) {
+                    try { b.addAllowedApplication(pkg); cnt++ } catch (_: Exception) {}
+                }
+                saveErr("режим: только браузеры ($cnt)")
+            } else {
+                applyExclusions(b)
+                saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
+            }
             var tries = 0
             while (tries < 5 && pfd == null && running) {
                 tries++
