@@ -301,9 +301,18 @@ class FilterService : VpnService() {
                         val uid = try { packageManager.getApplicationInfo(pkg, 0).uid } catch (_: Exception) { -1 }
                         saveErr("allowed: " + pkg + " uid=" + uid)
                         cnt++
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        // ПРИЧИНА обязана быть видна — иначе диагностика слепая
+                        saveErr("allowed FAIL: " + pkg + " " + e.javaClass.simpleName + ": " + (e.message ?: "?"))
+                    }
                 }
-                saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
+                if (cnt == 0) {
+                    // запасной путь: allowed пуст = все через VPN, исключаем себя
+                    saveErr("allowed пуст — фолбэк на режим всех приложений")
+                    b.addDisallowedApplication(packageName)
+                } else {
+                    saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
+                }
             } else {
                 applyExclusions(b)
                 saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
