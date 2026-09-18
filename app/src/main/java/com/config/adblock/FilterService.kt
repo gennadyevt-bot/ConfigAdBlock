@@ -319,9 +319,13 @@ class FilterService : VpnService() {
                 getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
                     "MODE=BROWSER_ONLY+" + (if (noMitmDbg0) "DIRECT" else "MITM")).apply()
             } else {
-                // VPN-DNS нужен только в полном режиме (там движок отвечает
-                // на 53-й порт). Браузеры в browser-only ходят своим DoH.
-                try { b.addDnsServer("10.0.0.2") } catch (_: Exception) {}
+                // КЛЮЧЕВОЕ РЕШЕНИЕ: addDnsServer НЕ ставим вообще. Chrome
+                // падал с DNS_PROBE_FINISHED_BAD_CONFIG, т.к. VPN-DNS
+                // доставался ему лишь частично (1 запрос из сессии).
+                // Системный DNS оператора работает исправно, а блокировка
+                // рекламы идёт на уровне расшифрованных HTTP-запросов —
+                // перехват DNS для MITM-режима не нужен.
+                saveErr("VPN-DNS: выкл (системный DNS оператора)")
                 // само-исключение ТОЛЬКО здесь, в ветке «все приложения»
                 try { b.addDisallowedApplication(packageName) } catch (_: Exception) {}
                 applyExclusions(b)
