@@ -59,6 +59,12 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, if (isChecked) "Отладка: 443 напрямую, без MITM" else "MITM включён", Toast.LENGTH_LONG).show()
         }
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
+        val chkBr = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkBrowsers)
+        chkBr.isChecked = prefs.getBoolean("browsers_only", true)
+        chkBr.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("browsers_only", isChecked).apply()
+            Toast.makeText(this, if (isChecked) "Режим: фильтруем только Chrome/Яндекс, остальное работает как обычно" else "Режим: все приложения через фильтр", Toast.LENGTH_LONG).show()
+        }
         val chkEmpty = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkEmpty)
         chkEmpty.isChecked = prefs.getBoolean("empty_vpn", false)
         chkEmpty.setOnCheckedChangeListener { _, isChecked ->
