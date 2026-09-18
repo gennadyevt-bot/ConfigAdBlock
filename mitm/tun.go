@@ -705,6 +705,15 @@ func resolveDoH(query []byte) ([]byte, error) {
 // Апстримы, доступные из РФ: AdGuard DNS и Яндекс.
 var udpUpstreams = []string{"94.140.14.14:53", "77.88.8.8:53", "8.8.8.8:53"}
 
+// DoT-эндпоинты (порт 853).
+var dotEndpoints = []struct {
+	addr string
+	name string
+}{
+	{"94.140.14.14:853", "dns.adguard-dns.com"},
+	{"77.88.8.8:853", "common.dot.dns.yandex.net"},
+}
+
 // Кэш DNS-ответов: снижает зависимость от живости апстримов в конкретную секунду.
 var (
 	dnsCacheMu sync.Mutex
