@@ -451,6 +451,20 @@ func lookupA(name string) (string, error) {
 	return "", errors.New("no A record")
 }
 
+// countingConn считает байты, реально прочитанные до/во время TLS-рукопожатия.
+type countingConn struct {
+	net.Conn
+	n *int64
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	m, err := c.Conn.Read(b)
+	if m > 0 {
+		atomic.AddInt64(c.n, int64(m))
+	}
+	return m, err
+}
+
 // handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
 // наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
@@ -489,13 +503,16 @@ func handle443(conn adapter.TCPConn, hp string) {
 			return certForName(name)
 		},
 	}
-	tlsConn := tls.Server(conn, cfg)
+	var gotBytes int64
+	tlsConn := tls.Server(&countingConn{Conn: conn, n: &gotBytes}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
 	atomic.AddInt64(&cliHello, 1)
 	if err := tlsConn.Handshake(); err != nil {
 		atomic.AddInt64(&cliTLSFail, 1)
-		setErr(fmt.Errorf("cliTLS %s: %w", hp, err))
-		flowLog(hp + "→cliTLSfail")
+		// bytes=0 + timeout => клиент просто молчит (не дело сертификата);
+		// bytes>0 + unknown certificate => дело доверия CA (GPT-развилка)
+		setErr(fmt.Errorf("cliTLS %s bytes=%d: %w", hp, atomic.LoadInt64(&gotBytes), err))
+		flowLog(fmt.Sprintf("%s→cliTLSfail(%dB)", hp, atomic.LoadInt64(&gotBytes)))
 		return
 	}
 	atomic.AddInt64(&cliTLSOk, 1)
@@ -833,7 +850,11 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		return
 	}
 
-	// QUIC и прочий UDP: прямой релей в апстрим (dst из заголовка потока)
+	// ДИАГНОСТИКА (GPT): временно роняем QUIC — браузер обязан уйти на TCP/443
+	if id.LocalPort == 443 {
+		return
+	}
+	// прочий UDP: прямой релей в апстрим (dst из заголовка потока)
 	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	up, err := dialUDP(dst)
 	if err != nil {
