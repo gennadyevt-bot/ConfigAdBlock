@@ -546,6 +546,8 @@ func handle443(conn adapter.TCPConn, hp string) {
 	}
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"}, // только HTTP/1.1: h2 мы не говорим,
+		// иначе бинарный preface "PRI * HTTP/2.0" не парсится http.ReadRequest
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			name := hello.ServerName
 			if name == "" {
@@ -585,86 +587,71 @@ func handle443(conn adapter.TCPConn, hp string) {
 			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
 			resp.Header.Set("Content-Type", "text/html")
 			_ = resp.Write(tlsConn)
-			if req.Close {
-				return
-			}
-			continue
+			return
 		}
-		atomic.AddInt64(&upDialOk, 0) // накрутка запрещена, держим структуру счётчиков
-		target := host
-		if !strings.Contains(target, ":") {
-			target += ":443"
-		}
-		up, err := dialTCP(target)
+		serverName := strings.Split(host, ":")[0]
+
+		// ФИКС: апстрим — по ИСХОДНОМУ IP назначения из TUN (hp).
+		// DNS не используем: браузер уже резолвил этот IP сам, а резолвер
+		// gomobile в VPN-контексте системного resolv.conf не видит.
+		up, err := dialTCP(hp)
 		if err != nil {
-			ip, lerr := lookupA(strings.Split(host, ":")[0])
+			// Резерв: DoT-резолв имени из Host (тот же путь, что у самотеста)
+			ip, lerr := lookupA(serverName)
 			if lerr != nil {
 				atomic.AddInt64(&upDialFail, 1)
-				setErr(fmt.Errorf("upDial %s: %v / %v", target, err, lerr))
+				setErr(fmt.Errorf("upDial %s: %v / %v", hp, err, lerr))
 				write502(tlsConn)
-				if req.Close {
-					return
-				}
-				continue
+				return
 			}
 			up, err = dialTCP(net.JoinHostPort(ip, "443"))
 			if err != nil {
 				atomic.AddInt64(&upDialFail, 1)
-				setErr(fmt.Errorf("upDial %s: %w", target, err))
+				setErr(fmt.Errorf("upDial %s: %w", hp, err))
 				write502(tlsConn)
-				if req.Close {
-					return
-				}
-				continue
+				return
 			}
 		}
 		atomic.AddInt64(&upDialOk, 1)
-		serverName := strings.Split(host, ":")[0]
-		upTLS := tls.Client(up, &tls.Config{ServerName: serverName})
+		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
 		if err := upTLS.Handshake(); err != nil {
 			atomic.AddInt64(&upTLSFail, 1)
 			setErr(fmt.Errorf("upTLS %s: %w", serverName, err))
 			_ = up.Close()
 			write502(tlsConn)
-			if req.Close {
-				return
-			}
-			continue
+			return
 		}
 		atomic.AddInt64(&upTLSOk, 1)
 		req.URL.Scheme = "https"
-		req.URL.Host = target
+		if strings.Contains(host, ":") {
+			req.URL.Host = host
+		} else {
+			req.URL.Host = host + ":443"
+		}
 		req.RequestURI = ""
 		req.Header.Del("Proxy-Connection")
 		req.Header.Del("Proxy-Authenticate")
 		req.Header.Del("Proxy-Authorization")
 		if err := req.Write(upTLS); err != nil {
 			_ = up.Close()
-			if req.Close {
-				return
-			}
-			continue
+			return
 		}
 		resp, err := http.ReadResponse(bufio.NewReader(upTLS), req)
 		if err != nil {
 			_ = up.Close()
 			setErr(fmt.Errorf("upRead %s: %w", serverName, err))
 			write502(tlsConn)
-			if req.Close {
-				return
-			}
-			continue
+			return
 		}
 		atomic.AddInt64(&httpRespN, 1)
 		resp = filterHTML(resp)
-		if err := resp.Write(tlsConn); err != nil {
-			_ = up.Close()
-			return
-		}
+		werr := resp.Write(tlsConn)
+		_ = resp.Body.Close() // явное закрытие: без него течёт апстрим-TLS
 		_ = up.Close()
-		if req.Close || resp.Close {
+		if werr != nil {
 			return
 		}
+		return // один запрос = одно соединение; Chrome открывает потоки параллельно
 	}
 }
 
@@ -805,12 +792,9 @@ func resolveDoT(query []byte) ([]byte, error) {
 		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
 		var lb [2]byte
 		binary.BigEndian.PutUint16(lb[:], uint16(len(query)))
-		if _, err := conn.Write(lb[:]); err != nil {
-			_ = conn.Close()
-			lastErr = fmt.Errorf("dot-%s write: %w", ep.name, err)
-			continue
-		}
-		if _, err := conn.Write(query); err != nil {
+		// один write вместо двух: отдельные TCP-сегменты префикс+payload
+		// рвали соединение у части DoT-серверов (read-hdr: EOF в логе)
+		if _, err := conn.Write(append(lb[:], query...)); err != nil {
 			_ = conn.Close()
 			lastErr = fmt.Errorf("dot-%s write: %w", ep.name, err)
 			continue
