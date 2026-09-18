@@ -64,6 +64,7 @@ var (
 	proxyMu        sync.Mutex
 	proxySrv       *http.Server
 	blockedDomains = make(map[string]bool)
+	blockedPaths   = make(map[string][]string) // host -> пути-префиксы (правила "host/path")
 	blockedMu      sync.RWMutex
 )
 
@@ -93,6 +94,7 @@ func loadBlocklist(path string) {
 	}
 	defer f.Close()
 	m := make(map[string]bool)
+	pm := make(map[string][]string)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for sc.Scan() {
@@ -110,12 +112,54 @@ func loadBlocklist(path string) {
 			continue
 		}
 		d = strings.TrimSuffix(d, ".")
+		// Правило "host/path" — блокирует только указанный префикс пути
+		// на этом домене (и его поддоменах), остальное живёт. Нужно,
+		// чтобы резать рекламные endpoint'ы общих доменов (yandex.ru/ads/)
+		// без убийства поиска и обычных ресурсов.
+		if i := strings.Index(d, "/"); i > 0 {
+			host, prefix := d[:i], d[i:]
+			if host != "" && strings.HasPrefix(prefix, "/") {
+				pm[host] = append(pm[host], prefix)
+				continue
+			}
+		}
 		m[d] = true
 	}
 	blockedMu.Lock()
 	blockedDomains = m
+	blockedPaths = pm
 	blockedMu.Unlock()
-	log.Printf("[MITM] blocklist: %d domains", len(m))
+	log.Printf("[MITM] blocklist: %d domains, %d path-rules", len(m), len(pm))
+}
+
+// checkURL проверяет host+path по блоклисту: сначала host-правила (поход
+// по родителям), потом path-правила "host/path". Возвращает совпавшее
+// правило — для журнала FILTER=BLOCK rule=<правило>.
+func checkURL(host, path string) (bool, string) {
+	d := strings.ToLower(strings.TrimSuffix(host, "."))
+	if i := strings.LastIndex(d, ":"); i >= 0 {
+		d = d[:i] // отрезаем порт
+	}
+	for cur := d; cur != ""; {
+		blockedMu.RLock()
+		hit := blockedDomains[cur]
+		prefixes := blockedPaths[cur]
+		blockedMu.RUnlock()
+		if hit {
+			return true, cur
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(path, p) {
+				return true, cur + p
+			}
+		}
+		idx := strings.Index(cur, ".")
+		if idx < 0 {
+			break
+		}
+		cur = cur[idx+1:]
+	}
+	return false, ""
 }
 
 // isBlocked проверяет домен и его родителей (тот же алгоритм, что в

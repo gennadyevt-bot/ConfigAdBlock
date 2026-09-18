@@ -308,11 +308,36 @@ var (
 	upTLSFail  int64
 	httpReqN   int64
 	httpRespN  int64
+	allowN     int64
 	blockedN   int64
 	c2uBytes   int64
 	u2cBytes   int64
 	normalEOF  int64
 )
+
+// adSuspicion возвращает причину подозрения на рекламу (или "").
+// НИЧЕГО не блокирует — только помечает запрос в журнале строкой ADS?.
+func adSuspicion(host, path string) string {
+	h := strings.ToLower(host)
+	p := strings.ToLower(path)
+	switch {
+	case strings.Contains(h, "adfox"):
+		return "adfox"
+	case strings.Contains(h, "an.yandex"):
+		return "yandex-direct"
+	case strings.Contains(h, "doubleclick") || strings.Contains(h, "googlesyndication"):
+		return "google-ads"
+	case strings.Contains(h, "lentainform"):
+		return "lenta-adserver"
+	case strings.HasPrefix(p, "/clck/"):
+		return "yandex-click-tracker"
+	case strings.HasPrefix(p, "/ads/") || strings.HasPrefix(p, "/showclicks/"):
+		return "yandex-ads-path"
+	case strings.Contains(p, "banner") || strings.Contains(p, "ads."):
+		return "ad-path-keyword"
+	}
+	return ""
+}
 
 func MitmStats() string {
 	return "acc " + strconv.FormatInt(atomic.LoadInt64(&acceptedN), 10) +
@@ -321,6 +346,7 @@ func MitmStats() string {
 		" up " + strconv.FormatInt(atomic.LoadInt64(&upDialOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upDialFail), 10) +
 		" utls " + strconv.FormatInt(atomic.LoadInt64(&upTLSOk), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&upTLSFail), 10) +
 		" http " + strconv.FormatInt(atomic.LoadInt64(&httpReqN), 10) + "/" + strconv.FormatInt(atomic.LoadInt64(&httpRespN), 10) +
+		" allow " + strconv.FormatInt(atomic.LoadInt64(&allowN), 10) +
 		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10) +
 		" c2u " + strconv.FormatInt(atomic.LoadInt64(&c2uBytes), 10) +
 		" u2c " + strconv.FormatInt(atomic.LoadInt64(&u2cBytes), 10) +
@@ -658,19 +684,30 @@ func handle443(conn adapter.TCPConn, hp string) {
 			continue
 		}
 		path := req.URL.Path
-		if len(path) > 60 {
-			path = path[:60]
+		if len(path) > 80 {
+			path = path[:80]
 		}
-		if isBlocked(host) {
+		ref := req.Header.Get("Referer")
+		if len(ref) > 50 {
+			ref = ref[:50]
+		}
+		blocked, rule := checkURL(req.Host, req.URL.Path)
+		if blocked {
 			atomic.AddInt64(&blockedN, 1)
-			flowLog(fmt.Sprintf("#%d req host=%s path=%s FILTER=BLOCK", fid, host, path))
+			flowLog(fmt.Sprintf("#%d req %s host=%s path=%s ref=%q FILTER=BLOCK rule=%q", fid, req.Method, host, path, ref, rule))
 			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
 			resp.Header.Set("Content-Type", "text/html")
 			_ = resp.Write(countWriter{w: tlsConn, n: &u2cBytes})
-			closeReason = "blocked"
+			closeReason = "blocked:" + rule
 			return
 		}
-		flowLog(fmt.Sprintf("#%d req host=%s path=%s FILTER=allow", fid, host, path))
+		atomic.AddInt64(&allowN, 1)
+		flowLog(fmt.Sprintf("#%d req %s host=%s path=%s ref=%q FILTER=allow", fid, req.Method, host, path, ref))
+		// ADS? — эвристическая пометка потенциально рекламных запросов.
+		// Блокирует НИЧЕГО, только подсвечивает в журнале для анализа.
+		if r := adSuspicion(req.Host, req.URL.Path); r != "" {
+			flowLog(fmt.Sprintf("#%d ADS? host=%s path=%s reason=%s", fid, host, path, r))
+		}
 		serverName := strings.Split(host, ":")[0]
 
 		// Апстрим — по ИСХОДНОМУ IP назначения из TUN (hp). DNS не нужен:
@@ -747,7 +784,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			closeReason = "respWriteX"
 			return
 		}
-		flowLog(fmt.Sprintf("#%d resp %d ok", fid, resp.StatusCode))
+		flowLog(fmt.Sprintf("#%d resp %d ok ct=%s", fid, resp.StatusCode, resp.Header.Get("Content-Type")))
 		closeReason = "done"
 		return // один запрос = одно соединение; Chrome открывает потоки параллельно
 	}
