@@ -110,11 +110,21 @@ func (s *socks5Server) tcpLoop() {
 	}
 }
 
+// Счётчики DIRECT-релея (матрица GPT: dialOK+TX>0+RX=0 => ответ не
+// возвращается; TX=0 => клиент ничего не отправил после коннекта).
+var (
+	dirTx int64
+	dirRx int64
+)
+
+func DirTx() int64 { return atomic.LoadInt64(&dirTx) }
+func DirRx() int64 { return atomic.LoadInt64(&dirRx) }
+
 func relay(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { _, _ = io.Copy(a, b); wg.Done() }()
-	go func() { _, _ = io.Copy(b, a); wg.Done() }()
+	go func() { n, _ := io.Copy(a, b); if n > 0 { atomic.AddInt64(&dirTx, n) }; wg.Done() }()
+	go func() { n, _ := io.Copy(b, a); if n > 0 { atomic.AddInt64(&dirRx, n) }; wg.Done() }()
 	wg.Wait()
 	_ = a.Close()
 	_ = b.Close()
