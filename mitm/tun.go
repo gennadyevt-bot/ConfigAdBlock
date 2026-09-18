@@ -607,51 +607,83 @@ func write502(w io.Writer) {
 
 // DNS через DNS-over-HTTPS: операторы РФ перехватывают/глушет plain
 // UDP 53, поэтому апстрим — только по 443 в обход перехвата.
-var dohClient = &http.Client{Timeout: 6 * time.Second}
-
-// Простейший кэш DNS-ответов: резко снижает зависимость от живости DoT.
-var (
-	dnsCacheMu sync.Mutex
-	dnsCache   = map[string][]byte{}
-	dnsCacheN  int
-)
-
-func dnsCacheGet(key string) ([]byte, bool) {
-	dnsCacheMu.Lock()
-	defer dnsCacheMu.Unlock()
-	v, ok := dnsCache[key]
-	return v, ok
-}
-
-func dnsCachePut(key string, v []byte) {
-	dnsCacheMu.Lock()
-	defer dnsCacheMu.Unlock()
-	if dnsCacheN > 2048 {
-		dnsCache = map[string][]byte{}
-		dnsCacheN = 0
-	}
-	cp := make([]byte, len(v))
-	copy(cp, v)
-	dnsCache[key] = cp
-	dnsCacheN++
-}
-
-// Апстримы, доступные из РФ: AdGuard DNS (сам режет рекламу на DNS-уровне)
-// и Яндекс. Cloudflare/Google с 2024 у большинства российских операторов
-// заблокированы — оттуда и было "DoH: все апстримы недоступны".
-var udpUpstreams = []string{"94.140.14.14:53", "77.88.8.8:53", "8.8.8.8:53"}
-
-var dohEndpoints = []string{
-	"https://94.140.14.14/dns-query",
-	"https://dns.google/dns-query",
-}
-
-var dotEndpoints = []struct {
-	addr string
-	name string
+// DoH вручную поверх tlsDial (тот же проверенный путь дозвона, что и у
+// самотеста) — http.Client в gomobile был непрозрачной точкой отказа.
+var dohList = []struct {
+	addr    string
+	tlsName string
 }{
-	{"94.140.14.14:853", "dns.adguard-dns.com"},
-	{"77.88.8.8:853", "common.dot.dns.yandex.net"},
+	{"94.140.14.14:443", "dns.adguard-dns.com"},
+	{"77.88.8.8:443", "common.dot.dns.yandex.net"},
+}
+
+func resolveDoH(query []byte) ([]byte, error) {
+	var last error
+	for _, ep := range dohList {
+		conn, err := tlsDial(ep.addr, ep.tlsName)
+		if err != nil {
+			last = fmt.Errorf("doh-%s dial: %w", ep.tlsName, err)
+			continue
+		}
+		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
+		head := fmt.Sprintf("POST /dns-query HTTP/1.1\r\nHost: %s\r\nContent-Type: application/dns-message\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", ep.tlsName, len(query))
+		if _, err := conn.Write([]byte(head)); err != nil {
+			_ = conn.Close()
+			last = fmt.Errorf("doh-%s write-head: %w", ep.tlsName, err)
+			continue
+		}
+		if _, err := conn.Write(query); err != nil {
+			_ = conn.Close()
+			last = fmt.Errorf("doh-%s write: %w", ep.tlsName, err)
+			continue
+		}
+		br := bufio.NewReader(conn)
+		status, err := br.ReadString('\n')
+		if err != nil {
+			_ = conn.Close()
+			last = fmt.Errorf("doh-%s status-read: %w", ep.tlsName, err)
+			continue
+		}
+		if !strings.Contains(status, "200") {
+			_ = conn.Close()
+			last = fmt.Errorf("doh-%s status: %s", ep.tlsName, strings.TrimSpace(status))
+			continue
+		}
+		clen := -1
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				break
+			}
+			if line == "\r\n" {
+				break
+			}
+			if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+				fmt.Sscanf(strings.TrimSpace(line[15:]), "%d", &clen)
+			}
+		}
+		var resp []byte
+		if clen > 0 && clen < 16384 {
+			resp = make([]byte, clen)
+			if _, err := io.ReadFull(br, resp); err != nil {
+				_ = conn.Close()
+				last = fmt.Errorf("doh-%s body: %w", ep.tlsName, err)
+				continue
+			}
+		} else {
+			resp, err = io.ReadAll(br)
+			_ = err
+		}
+		_ = conn.Close()
+		if len(resp) >= 12 {
+			return resp, nil
+		}
+		last = fmt.Errorf("doh-%s short(%d)", ep.tlsName, len(resp))
+	}
+	if last == nil {
+		last = errors.New("DoH: нет эндпоинтов")
+	}
+	return nil, last
 }
 
 // resolveDoT: DNS-over-TLS (порт 853). Оператор режет plain UDP 53 —
