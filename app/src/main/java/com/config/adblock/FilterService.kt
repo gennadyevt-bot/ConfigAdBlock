@@ -289,13 +289,21 @@ class FilterService : VpnService() {
                 .addDisallowedApplication(packageName)
             // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
             // остальные приложения гарантированно работают вне туннеля
-            val browsersOnly = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("browsers_only", false) } catch (_: Exception) { false }
+            // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
+            // пока галочку не трогаешь, pref не существует и режим молча
+            // оставался «все приложения». Теперь дефолт везде true.
+            val browsersOnly = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("browsers_only", true) } catch (_: Exception) { true }
             if (browsersOnly) {
                 var cnt = 0
                 for (pkg in listOf("com.android.chrome", "com.yandex.browser")) {
-                    try { b.addAllowedApplication(pkg); cnt++ } catch (_: Exception) {}
+                    try {
+                        b.addAllowedApplication(pkg)
+                        val uid = try { packageManager.getApplicationInfo(pkg, 0).uid } catch (_: Exception) { -1 }
+                        saveErr("allowed: " + pkg + " uid=" + uid)
+                        cnt++
+                    } catch (_: Exception) {}
                 }
-                saveErr("режим: только браузеры ($cnt)")
+                saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
             } else {
                 applyExclusions(b)
                 saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
