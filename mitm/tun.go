@@ -773,32 +773,6 @@ func resolveDNS(query []byte) ([]byte, error) {
 	return resolveDoH(query)
 }
 
-func resolveDoH(query []byte) ([]byte, error) {
-	for _, url := range dohEndpoints {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(query))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/dns-message")
-		req.Header.Set("Accept", "application/dns-message")
-		resp, err := dohClient.Do(req)
-		if err != nil {
-			continue
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-		if err != nil || resp.StatusCode != 200 || len(body) < 12 {
-			continue
-		}
-		return body, nil
-	}
-	return nil, errors.New("DoH: все апстримы недоступны")
-}
-
-// DNS: каждый UDP-поток на порт 53 — один запрос-ответ.
-// UDP: релей в апстрим для ЛЮБОГО порта. Порт 53 — через DoT (оператор
-// режет plain DNS). Остальное (QUIC/443 и др.) — напрямую, иначе браузеры
-// зависают на QUIC без фолбэка и "интернета нет".
 func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	defer conn.Close()
 	id := conn.ID()
