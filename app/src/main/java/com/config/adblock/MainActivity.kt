@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, if (isChecked) "Отладка: 443 напрямую, без MITM" else "MITM включён", Toast.LENGTH_LONG).show()
         }
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
+        findViewById<MaterialButton>(R.id.btnResetCa).setOnClickListener { resetCa() }
         val chkBr = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkBrowsers)
         chkBr.isChecked = prefs.getBoolean("browsers_only", true)
         chkBr.setOnCheckedChangeListener { _, isChecked ->
@@ -127,6 +128,27 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Отмена", null)
                 .show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Сброс CA: удаляет текущую пару сертификатов (в приложении и бэкапах
+    // в Загрузках). При следующем включении движок сгенерирует СВЕЖУЮ пару —
+    // гарантия совпадения с тем, что пользователь установит в систему.
+    // Старый сертификат в системе после этого станет мусором — удали его
+    // в настройках (Настройки → Безопасность → Учётные данные пользователя).
+    private fun resetCa() {
+        try {
+            filesDir.listFiles()?.forEach { f ->
+                if (f.name == "ca.crt" || f.name == "ca.key") f.delete()
+            }
+            try {
+                val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                File(dir, "ConfigAdBlock-CA.crt").delete()
+                File(dir, "ConfigAdBlock-CA.key").delete()
+            } catch (_: Exception) {}
+            Toast.makeText(this, "Сертификат сброшен. Теперь: 1) удали старый в настройках телефона 2) нажми УСТАНОВИТЬ СЕРТИФИКАТ и поставь новый 3) включи фильтр", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
         }
