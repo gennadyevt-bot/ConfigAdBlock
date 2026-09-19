@@ -39,7 +39,7 @@ import (
 var (
 	stackMu   sync.Mutex
 	stackInst *stack.Stack
-	stackDev  device.Device
+	stackDev  stack.LinkEndpoint
 
 	direct443 int64
 )

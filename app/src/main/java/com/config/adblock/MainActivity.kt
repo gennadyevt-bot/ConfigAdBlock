@@ -344,4 +344,9 @@ class MainActivity : AppCompatActivity() {
                         btn.postDelayed({ updateUi() }, 500)
                     }
                 } catch (e: Exception) {
-                    logClick("ОШИБКА клика: " + 
+                    logClick("ОШИБКА клика: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+                }
+            }
+        }
+    }
+}
