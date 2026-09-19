@@ -203,7 +203,13 @@ func StackStats() string {
 	s := st.Stats()
 	return "ip=" + strconv.FormatUint(s.IP.PacketsReceived.Value(), 10) +
 		" tcpseg=" + strconv.FormatUint(s.TCP.ValidSegmentsReceived.Value(), 10) +
-		" udp=" + strconv.FormatUint(s.UDP.PacketsReceived.Value(), 10)
+		" udp=" + strconv.FormatUint(s.UDP.PacketsReceived.Value(), 10) +
+		" | tcp4=" + strconv.FormatInt(atomic.LoadInt64(&tcp4N), 10) +
+		" tcp6=" + strconv.FormatInt(atomic.LoadInt64(&tcp6N), 10) +
+		" 443v4=" + strconv.FormatInt(atomic.LoadInt64(&t443v4N), 10) +
+		" 443v6=" + strconv.FormatInt(atomic.LoadInt64(&t443v6N), 10) +
+		" udp443v4=" + strconv.FormatInt(atomic.LoadInt64(&udp443v4N), 10) +
+		" udp443v6=" + strconv.FormatInt(atomic.LoadInt64(&udp443v6N), 10)
 }
 
 // StopTunnel останавливает стек и закрывает fd (Android освободит TUN).
@@ -245,6 +251,12 @@ var (
 	quicRelays int64
 	quicDrops  int64
 	udpSeen    int64
+	tcp4N      int64
+	tcp6N      int64
+	t443v4N    int64
+	t443v6N    int64
+	udp443v4N  int64
+	udp443v6N  int64
 )
 
 // UdpSeen/QuicDrops — наблюдаемость UDP (диагностика GPT: весь UDP
@@ -273,8 +285,20 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
 	hp := net.JoinHostPort(host, strconv.Itoa(port))
+	// GPT: раздельные счётчики IPv4/IPv6 TCP и 443
+	isV6 := strings.Contains(host, ":")
+	if isV6 {
+		atomic.AddInt64(&tcp6N, 1)
+	} else {
+		atomic.AddInt64(&tcp4N, 1)
+	}
 	if port == 443 {
 		atomic.AddInt64(&t443seen, 1)
+		if isV6 {
+			atomic.AddInt64(&t443v6N, 1)
+		} else {
+			atomic.AddInt64(&t443v4N, 1)
+		}
 	}
 
 	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
@@ -626,8 +650,8 @@ func handle443(conn adapter.TCPConn, hp string) {
 	}
 	flowLog(fmt.Sprintf("#%d dst=%s fam=%s accepted", fid, hp, fam))
 	hostOnly := hp
-	if i := strings.LastIndex(hp, ":"); i > 0 {
-		hostOnly = hp[:i]
+	if h, _, err := net.SplitHostPort(hp); err == nil {
+		hostOnly = strings.Trim(h, "[]") // корректно и для IPv6 (много ':')
 	}
 	// DoH-эндпоинты: сырой туннель без MITM (иначе "unknown certificate",
 	// т.к. клиент не доверяет нашему CA -> DNS умирает целиком)
@@ -751,7 +775,13 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if r := adSuspicion(req.Host, req.URL.Path); r != "" {
 			flowLog(fmt.Sprintf("#%d ADS? host=%s path=%s reason=%s", fid, host, path, r))
 		}
-		serverName := strings.Split(host, ":")[0]
+		// serverName: корректный парсинг и для IPv6-литералов ([::1]:443)
+		serverName := host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			serverName = strings.Trim(h, "[]")
+		} else {
+			serverName = strings.Trim(host, "[]")
+		}
 
 		// Апстрим — по ИСХОДНОМУ IP назначения из TUN (hp). DNS не нужен:
 		// браузер уже резолвил этот IP, а резолвер gomobile системного
@@ -1088,6 +1118,11 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Браузер откатывается на TCP/443 -> уже рабочий MITM-пайплайн.
 	if id.LocalPort == 443 {
 		atomic.AddInt64(&quicDrops, 1)
+		if strings.Contains(id.LocalAddress.String(), ":") {
+			atomic.AddInt64(&udp443v6N, 1)
+		} else {
+			atomic.AddInt64(&udp443v4N, 1)
+		}
 		return
 	}
 	// прочий UDP: прямой релей в апстрим (dst из заголовка потока)

@@ -276,15 +276,19 @@ class FilterService : VpnService() {
             } catch (_: Exception) {}
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
+            // флаг для экрана диагностики: IPv6 завёрнут в туннель
+            getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("ipv6_routed", true).apply()
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
-                // IPv6 НЕ перехватываем (GPT 0.5.43): тупой ::/0 в v4-only
-                // стек превратил бы v6 в blackhole и убил бы интернет.
-                // Сначала диагностика (IPv6 BYPASS POSSIBLE на экране),
-                // корректное решение — отдельным обоснованным коммитом.
+                // IPv6-перехват (0.5.50): tun2socks/gVisor v2.7.0 уже
+                // поддерживает v6 (promiscuous+spoofing, маршрут ::/0 в
+                // стеке). Весь IPv6 TCP придёт в HandleTCP -> тот же MITM;
+                // UDP/443 v6 падает в тот же drop -> откат браузера на TCP.
+                .addAddress("fd00:1:2:3::1", 128)
+                .addRoute("::", 0)
                 // addDnsServer сознательно НЕ в цепочке: в режиме «только
                 // браузеры» VPN-DNS отравил бы резолвер ВСЕХ приложений
                 // (не-allowed физически не достигают 10.0.0.2). Ставим его

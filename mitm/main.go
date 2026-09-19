@@ -136,10 +136,12 @@ func loadBlocklist(path string) {
 // по родителям), потом path-правила "host/path". Возвращает совпавшее
 // правило — для журнала FILTER=BLOCK rule=<правило>.
 func checkURL(host, path string) (bool, string) {
-	d := strings.ToLower(strings.TrimSuffix(host, "."))
-	if i := strings.LastIndex(d, ":"); i >= 0 {
-		d = d[:i] // отрезаем порт
+	d := strings.ToLower(host)
+	// отрезаем порт корректно и для IPv6 ([2001:db8::1]:443 -> 2001:db8::1)
+	if h, _, err := net.SplitHostPort(d); err == nil {
+		d = h
 	}
+	d = strings.Trim(strings.TrimSuffix(d, "."), "[]")
 	for cur := d; cur != ""; {
 		blockedMu.RLock()
 		hit := blockedDomains[cur]
