@@ -287,14 +287,7 @@ class FilterService : VpnService() {
                 .putLong("sess_at", System.currentTimeMillis()).apply()
             // 0.5.73: список SNI очищается при каждом запуске VPN
             try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
-            // TEST FAILSAFE 0.5.74: аварийный автостоп через 30 с —
-            // при проблеме интернет гарантированно вернётся сам
-            Handler(Looper.getMainLooper()).postDelayed({
-                saveErr("TEST FAILSAFE: автостоп через 30с")
-                try {
-                    startService(Intent(this@FilterService, FilterService::class.java).setAction("STOP"))
-                } catch (_: Exception) {}
-            }, 30_000)
+            // 0.5.75: аварийный автостоп убран — пользователь выключает сам
             // Итоговая конфигурация VPN ДО establish (GPT: разбираем
             // обход TUN браузером — нужно видеть, что реально в билдере)
             val boCfg = try { sp0.getBoolean("browsers_only", true) } catch (_: Exception) { true }
