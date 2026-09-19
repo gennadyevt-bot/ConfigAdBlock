@@ -18,6 +18,9 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
 import java.io.File
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.net.NetworkInterface
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
@@ -154,6 +157,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Диагностика IPv6-bypass (GPT): есть ли на устройстве рабочий IPv6,
+    // куда маршрутизирует VPN, и резолвится ли lenta.ru в AAAA.
+    private var v6cache = ""
+    private var v6cacheAt = 0L
+    private var aaaaCache = ""
+
+    private fun ipv6Diag(): String {
+        val now = System.currentTimeMillis()
+        if (v6cache.isNotEmpty() && now - v6cacheAt < 60_000) return v6cache
+        val v6addrs = mutableListOf<String>()
+        val v4addrs = mutableListOf<String>()
+        try {
+            val ifs = NetworkInterface.getNetworkInterfaces()
+            while (ifs != null && ifs.hasMoreElements()) {
+                val ni = ifs.nextElement()
+                if (!ni.isUp || ni.isLoopback) continue
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    try {
+                        if (a is Inet6Address) {
+                            val h = a.hostAddress ?: continue
+                            if (!h.startsWith("fe80:") && !h.startsWith("::1")) {
+                                v6addrs.add(ni.name + "=" + h.split("%")[0])
+                            }
+                        } else {
+                            v4addrs.add(ni.name + "=" + (a.hostAddress ?: "?"))
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+        // Флаг ipv6_routed выставляет FilterService при построении туннеля
+        val routed = prefs.getBoolean("ipv6_routed", false)
+        val hasV6 = v6addrs.isNotEmpty()
+        val line = "IPv6 BYPASS POSSIBLE: " + (if (hasV6 && !routed) "YES" else "NO") +
+            " | v6: " + (if (hasV6) v6addrs.take(3).joinToString(",") else "none") +
+            " | v4: " + (if (v4addrs.isNotEmpty()) v4addrs.take(3).joinToString(",") else "none")
+        v6cache = line
+        v6cacheAt = now
+        if (aaaaCache.isEmpty()) {
+            Thread {
+                try {
+                    val all = InetAddress.getAllByName("lenta.ru")
+                    val a4 = all.count { it !is Inet6Address }
+                    val a6 = all.count { it is Inet6Address }
+                    aaaaCache = "lenta.ru: A=" + a4 + " AAAA=" + a6
+                } catch (e: Exception) {
+                    aaaaCache = "lenta.ru resolve FAIL"
+                }
+            }.start()
+        }
+        return line + (if (aaaaCache.isNotEmpty()) "\n" + aaaaCache else "")
+    }
+
     private fun saveStopToLog() {
         try {
             val prefs = getSharedPreferences("stats", MODE_PRIVATE)
@@ -221,7 +279,18 @@ class MainActivity : AppCompatActivity() {
         val modeline = prefs.getString("modeline", "") ?: ""
         val dtx = prefs.getLong("dir_tx", 0)
         val drx = prefs.getLong("dir_rx", 0)
-        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
+        val v6line = ipv6Diag()
+        val sessN = prefs.getLong("sess_n", 0)
+        val sessAt = prefs.getLong("sess_at", 0)
+        val lastAt = prefs.getLong("last_at", 0)
+        val lastMst = prefs.getString("last_mitmstats", "") ?: ""
+        val fmt = java.text.SimpleDateFormat("HH:mm:ss")
+        val sessLine = "sess #" + sessN + " start " + (if (sessAt > 0) fmt.format(java.util.Date(sessAt)) else "-") +
+            " | QUIC udp443 seen " + prefs.getLong("udp_seen", 0) + " dropped " + prefs.getLong("quic_drops", 0) + " TCP443 fb " + prefs.getLong("t443", 0)
+        val lastLine = if (lastAt > sessAt && lastMst.isNotEmpty()) {
+            "прошлая сессия @" + fmt.format(java.util.Date(lastAt)) + ": " + lastMst + " fb " + prefs.getLong("last_t443", 0) + " quic " + prefs.getLong("last_udp_seen", 0) + "/" + prefs.getLong("last_quic_drops", 0)
+        } else ""
+        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + sessLine + "\n" + (if (v6line.isNotEmpty()) v6line + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + (if (lastLine.isNotEmpty()) lastLine + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
         val eerr = prefs.getString("eng_err", "") ?: ""
         val st = prefs.getString("selftest", "") ?: ""
         val pst = prefs.getString("proxy_state", "") ?: ""

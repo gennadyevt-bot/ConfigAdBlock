@@ -281,13 +281,10 @@ class FilterService : VpnService() {
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
-                // IPv6-ЭКСПЕРИМЕНТ (GPT): раньше v6 шёл МИМО VPN — Chrome
-                // брал AAAA и ходил напрямую, реклама обходила MITM полностью.
-                // Теперь v6 заворачиваем в TUN: стек v4-only гасит пакеты,
-                // браузер по Happy Eyeballs откатывается на IPv4 -> MITM.
-                // (Тот же механизм, что дроп UDP/443 для QUIC.)
-                .addAddress("fd00:1:2:3::1", 128)
-                .addRoute("::", 0)
+                // IPv6 НЕ перехватываем (GPT 0.5.43): тупой ::/0 в v4-only
+                // стек превратил бы v6 в blackhole и убил бы интернет.
+                // Сначала диагностика (IPv6 BYPASS POSSIBLE на экране),
+                // корректное решение — отдельным обоснованным коммитом.
                 // addDnsServer сознательно НЕ в цепочке: в режиме «только
                 // браузеры» VPN-DNS отравил бы резолвер ВСЕХ приложений
                 // (не-allowed физически не достигают 10.0.0.2). Ставим его
@@ -406,6 +403,11 @@ class FilterService : VpnService() {
             }
             thread { try { mitm.Mitm.netSelfTest() } catch (_: Exception) {} }
             saveErr("4/5 туннель поднят, фильтр работает")
+            // SESSION ID (GPT): чтобы нули новой сессии не путать с
+            // реальным отсутствием трафика в прошлой.
+            val sp0 = getSharedPreferences("stats", MODE_PRIVATE)
+            sp0.edit().putLong("sess_n", sp0.getLong("sess_n", 0) + 1)
+                .putLong("sess_at", System.currentTimeMillis()).apply()
             while (running) {
                 try {
                     Thread.sleep(2000)
@@ -437,6 +439,8 @@ class FilterService : VpnService() {
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
                         .putLong("t443", mitm.Mitm.t443Seen())
                         .putLong("quic", mitm.Mitm.quicRelays())
+                        .putLong("udp_seen", mitm.Mitm.udpSeen())
+                        .putLong("quic_drops", mitm.Mitm.quicDrops())
                         .putString("mitmstats", mitm.Mitm.mitmStats())
                         .putString("cainfo", mitm.Mitm.caInfo())
                         .putString("leafverify", mitm.Mitm.leafVerify())
@@ -449,6 +453,18 @@ class FilterService : VpnService() {
             saveErr("КРАХ HTTPS: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
         } finally {
             saveErr("стоп HTTPS")
+            // Снапшот последней сессии (GPT): нули свежего старта не должны
+            // затирать цифры, которые пользователь ещё не успел посмотреть.
+            try {
+                getSharedPreferences("stats", MODE_PRIVATE).edit()
+                    .putString("last_mitmstats", mitm.Mitm.mitmStats())
+                    .putLong("last_t443", mitm.Mitm.t443Seen())
+                    .putLong("last_udp_seen", mitm.Mitm.udpSeen())
+                    .putLong("last_quic_drops", mitm.Mitm.quicDrops())
+                    .putLong("last_at", System.currentTimeMillis())
+                    .putString("last_flowlog", mitm.Mitm.flowLog())
+                    .apply()
+            } catch (_: Exception) {}
             running = false
             isRunning = false
             try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}

@@ -280,7 +280,11 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
 	if port != 443 || direct443On() {
 		atomic.AddInt64(&directCnt, 1)
-		flowLog(fmt.Sprintf("tcp dst=%s direct", hp))
+		dfam := "v4"
+		if strings.Contains(hp, ":") {
+			dfam = "v6"
+		}
+		flowLog(fmt.Sprintf("tcp dst=%s fam=%s direct", hp, dfam))
 		up, err := dialTCP(hp)
 		if err != nil {
 			setErr(fmt.Errorf("direct %s: %w", hp, err))
@@ -598,7 +602,11 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	atomic.AddInt64(&acceptedN, 1)
-	flowLog(fmt.Sprintf("#%d dst=%s accepted", fid, hp))
+	fam := "v4"
+	if strings.Contains(hp, ":") {
+		fam = "v6" // GPT: семейство адреса в каждом соединении
+	}
+	flowLog(fmt.Sprintf("#%d dst=%s fam=%s accepted", fid, hp, fam))
 	hostOnly := hp
 	if i := strings.LastIndex(hp, ":"); i > 0 {
 		hostOnly = hp[:i]
@@ -1041,7 +1049,11 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// где именно ходит браузер, ничего не пропуская мимо наблюдения).
 	// Счётчики: udpTry = ВСЕ UDP-пакеты, udpSeen = уникальные потоки UDP.
 	atomic.AddInt64(&udpSeen, 1)
-	flowLog(fmt.Sprintf("udp dst=%s:%d", id.LocalAddress.String(), id.LocalPort))
+	ufam := "v4"
+	if strings.Contains(id.LocalAddress.String(), ":") {
+		ufam = "v6"
+	}
+	flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
 
 	// UDP/443 (QUIC/HTTP3): НЕ пропускаем напрямую — иначе рекламный
 	// трафик уходит по HTTP/3 МИМО MITM (тракт TLS+HTTP его не видит).
