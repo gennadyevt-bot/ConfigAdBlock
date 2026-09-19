@@ -4,47 +4,47 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Однотонный зелёный фон -->
+    <!-- Однотонный зелёный фон (full-bleed) -->
     <path
         android:fillColor="#20952A"
         android:pathData="M0,0 H108 V108 H0 Z"/>
 
-    <!-- Ровный белый круг -->
+    <!-- Ровный белый круг, крупный -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="6.5"
-        android:pathData="M54,14
-                          A40,40 0,1 1,53.99 14"/>
+        android:strokeWidth="7"
+        android:pathData="M54,8
+                          A46,46 0,1 1,53.99 8"/>
 
     <!-- Буква A -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M27,76
-                          L42,34
+        android:pathData="M23,79
+                          L40,31
                           H51
-                          L66,76
+                          L68,79
                           H56
-                          L53,66
-                          H40
-                          L37,76 Z
-                          M43,58
-                          H50
-                          L46.5,46 Z"/>
+                          L53,68
+                          H38
+                          L34,79 Z
+                          M41,59
+                          H49
+                          L45,45 Z"/>
 
     <!-- Буква D -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M62,34
-                          H75
-                          C87,34 93,42 93,55
-                          C93,68 87,76 75,76
-                          H62 Z
-                          M71,43
-                          V67
-                          H75
-                          C81,67 84,63 84,55
-                          C84,47 81,43 75,43 Z"/>
+        android:pathData="M63,31
+                          H78
+                          C92,31 99,40 99,55
+                          C99,70 92,79 78,79
+                          H63 Z
+                          M74,45
+                          V69
+                          H78
+                          C85,69 89,64 89,55
+                          C89,46 85,45 78,45 Z"/>
 
     <!-- Диагональная черта -->
     <path
@@ -52,6 +52,6 @@
         android:strokeColor="#FFFFFF"
         android:strokeWidth="7"
         android:strokeLineCap="round"
-        android:pathData="M25,25 L83,83"/>
+        android:pathData="M20,20 L87,87"/>
 
 </vector>
