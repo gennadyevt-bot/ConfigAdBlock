@@ -211,6 +211,31 @@ func (c *tunCounter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// dnsQueryDomain извлекает домен из вопроса DNS-запроса (0.5.77).
+func dnsQueryDomain(q []byte) string {
+	if len(q) < 12 {
+		return ""
+	}
+	i := 12
+	var parts []string
+	for i < len(q) {
+		l := int(q[i])
+		i++
+		if l == 0 {
+			break
+		}
+		if l > 63 || i+l > len(q) {
+			return ""
+		}
+		parts = append(parts, string(q[i:i+l]))
+		i += l
+	}
+	if i+4 <= len(q) {
+		i += 4 // QTYPE + QCLASS
+	}
+	return strings.Join(parts, ".")
+}
+
 func analyzeTunPkt(b []byte) {
 	if len(b) < 20 {
 		return
@@ -1495,6 +1520,19 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 
 	if isDNS {
+		// 0.5.77 DNS_ONLY (GPT): домен в блок-листе -> NXDOMAIN,
+		// без кэша и без upstream-резолва
+		if dom := dnsQueryDomain(buf[:n]); dom != "" && isBlocked(dom) {
+			atomic.AddInt64(&blockedN, 1)
+			flowLog("DNS_BLOCK " + dom)
+			resp := make([]byte, 12)
+			copy(resp, buf[:2])
+			resp[2] = 0x81 // QR|RD
+			resp[3] = 0x83 // RA + RCODE=3 (NXDOMAIN)
+			resp = append(resp, buf[12:n]...) // question как есть
+			_, _ = conn.Write(resp)
+			return
+		}
 		key := string(buf[:n])
 		if cached, ok := dnsCacheGet(key); ok {
 			atomic.AddInt64(&udpCount, 1)
