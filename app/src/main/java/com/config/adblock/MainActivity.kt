@@ -278,6 +278,11 @@ class MainActivity : AppCompatActivity() {
             val lastLog = prefs.getString("last_log", "") ?: ""
             if (lastLog.isNotEmpty()) logText = lastLog
         }
+        // 0.5.73 (GPT): видимый список последних SNI с вердиктами
+        val sniLog = prefs.getString("snilog", "") ?: ""
+        if (sniLog.isNotEmpty()) {
+            logText = logText + "\n--- SNI (последние, сверху новые) ---\n" + sniLog
+        }
         val sst = prefs.getString("stackstats", "") ?: ""
         val mst = prefs.getString("mitmstats", "") ?: ""
         val tst = prefs.getString("tunstats", "") ?: ""
