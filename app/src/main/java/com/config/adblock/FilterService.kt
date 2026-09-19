@@ -300,14 +300,25 @@ class FilterService : VpnService() {
             val linkV6 = lpV6?.linkAddresses?.any {
                 it.address is java.net.Inet6Address && !it.address.isLinkLocalAddress && !it.address.isLoopbackAddress
             } == true
-            val probeV6 = try {
-                java.net.Socket().use { s ->
-                    s.connect(java.net.InetSocketAddress("2001:4860:4860::8888", 443), 2500)
-                    true
+            // Пробник — фоном, с кэшем 10 мин: кнопка ВКЛ не должна ждать
+            // TCP-хендшейк. Первый запуск после смены сети берёт кэш,
+            // фоновый поток обновит его для следующего включения.
+            val spV6 = getSharedPreferences("stats", MODE_PRIVATE)
+            val cachedOk = spV6.getBoolean("v6_ok", false)
+            val cachedAt = spV6.getLong("v6_at", 0)
+            val probeV6 = if (System.currentTimeMillis() - cachedAt < 600_000) cachedOk else cachedOk
+            Thread {
+                try {
+                    java.net.Socket().use { s ->
+                        s.connect(java.net.InetSocketAddress("2001:4860:4860::8888", 443), 2500)
+                        spV6.edit().putBoolean("v6_ok", true).putLong("v6_at", System.currentTimeMillis()).apply()
+                    }
+                } catch (_: Exception) {
+                    spV6.edit().putBoolean("v6_ok", false).putLong("v6_at", System.currentTimeMillis()).apply()
                 }
-            } catch (_: Exception) { false }
+            }.start()
             val hasV6 = linkV6 && probeV6
-            saveErr("VPN_CONFIG_V6 link=" + linkV6 + " probe=" + probeV6 + " route=" + (if (hasV6) "ON" else "OFF"))
+            saveErr("VPN_CONFIG_V6 link=" + linkV6 + " probe=" + probeV6 + "(cached) route=" + (if (hasV6) "ON" else "OFF"))
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
                 .setMtu(1500)
