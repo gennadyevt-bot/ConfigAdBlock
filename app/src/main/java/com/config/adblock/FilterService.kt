@@ -343,8 +343,6 @@ class FilterService : VpnService() {
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer("10.0.0.1")
                 .addRoute("10.0.0.1", 32)
-                // stage2 delivery: fake-IP dzen.ru -> mini-MITM в движке
-                .addRoute("10.0.0.3", 32)
             try {
                 b.addDisallowedApplication(packageName)
                 saveErr("DISALLOWED_SELF_OK " + packageName)
