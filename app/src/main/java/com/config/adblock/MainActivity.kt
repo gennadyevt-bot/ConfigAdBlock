@@ -56,11 +56,9 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<MaterialButton>(R.id.btnCert).setOnClickListener { installCert() }
         val chkNoMitm = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkNoMitm)
-        chkNoMitm.isChecked = prefs.getBoolean("no_mitm", false)
-        chkNoMitm.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean("no_mitm", isChecked).apply()
-            Toast.makeText(this, if (isChecked) "Отладка: 443 напрямую, без MITM" else "MITM включён", Toast.LENGTH_LONG).show()
-        }
+        prefs.edit().putBoolean("no_mitm", false).apply()
+        chkNoMitm.isChecked = false
+        chkNoMitm.visibility = android.view.View.GONE
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
         findViewById<MaterialButton>(R.id.btnResetCa).setOnClickListener { resetCa() }
         val chkBr = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkBrowsers)

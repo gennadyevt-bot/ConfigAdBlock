@@ -396,8 +396,9 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 		}
 	}
 
-	// Не-TLS порты (и 443 в отладочном режиме) — напрямую, без MITM
-	if port != 443 || direct443On() {
+	// Не-TLS порты — напрямую. TCP/443 всегда проходит SNI-фильтр;
+	// старый отладочный флаг не должен обходить SAFE MODE.
+	if port != 443 {
 		atomic.AddInt64(&directCnt, 1)
 		dfam := "v4"
 		if strings.Count(hp, ":") > 1 {
