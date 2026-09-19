@@ -1,0 +1,12 @@
+[Adblock Plus 2.0]
+! ConfigAdBlock content blocker filters (Samsung Internet / Yandex Browser)
+! Доставляется через Content Blocker API - без MITM, без fake-IP.
+
+! --- dzen.ru: нативные рекламные карточки (первый тест) ---
+dzen.ru##[data-ad-type="direct"]
+dzen.ru##[data-ad-type="banner"]
+
+! --- базовые сетевые правила (чтобы фильтр был заметен сразу) ---
+||doubleclick.net^
+||googlesyndication.com^
+||ads.adfox.ru^
