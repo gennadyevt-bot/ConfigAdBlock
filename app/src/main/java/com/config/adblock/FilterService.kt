@@ -346,7 +346,11 @@ class FilterService : VpnService() {
             // 0.5.66 (GPT): контрольная сборка снова BROWSER_ONLY —
             // отделяем проблему глобального захвата от DNS. Пробник v6 и
             // запрет самому себе остаются в любом режиме.
-            val browsersOnly = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("browsers_only", true) } catch (_: Exception) { true }
+            // контрольная сборка 0.5.67: принудительно BROWSER_ONLY —
+            // в эпоху ALL_APPS_DIAG в настройках осталось browsers_only=false,
+            // и 0.5.66 честно ушла в MODE=ALL
+            getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("browsers_only", true).apply()
+            val browsersOnly = true
             saveErr("MODE=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL"))
             try {
                 b.addDisallowedApplication(packageName)
