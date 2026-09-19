@@ -310,6 +310,7 @@ func StackStats() string {
 func StopTunnel() {
 	stackMu.Lock()
 	defer stackMu.Unlock()
+	ClearBypassCache() // bypass-кэш живёт только одну сессию (GPT)
 	if stackInst != nil {
 		stackInst.Close()
 		stackInst = nil
@@ -498,7 +499,11 @@ func MitmStats() string {
 		" c2u " + strconv.FormatInt(atomic.LoadInt64(&c2uBytes), 10) +
 		" u2c " + strconv.FormatInt(atomic.LoadInt64(&u2cBytes), 10) +
 		" eofOK " + strconv.FormatInt(atomic.LoadInt64(&normalEOF), 10) +
-		" h2bypass " + strconv.FormatInt(atomic.LoadInt64(&h2BypassN), 10)
+		" h2bypass " + strconv.FormatInt(atomic.LoadInt64(&h2BypassN), 10) +
+		" certbypass " + strconv.FormatInt(atomic.LoadInt64(&certBypassN), 10) +
+		" failopen " + strconv.FormatInt(atomic.LoadInt64(&failopenN), 10) +
+		" direct ok " + strconv.FormatInt(atomic.LoadInt64(&directOkN), 10) +
+		" fail " + strconv.FormatInt(atomic.LoadInt64(&directFailN), 10)
 }
 
 // Своя фабрика сертификатов хостов (вместо goproxy TLSConfigFromCA —
@@ -727,6 +732,43 @@ func (c countWriter) Write(b []byte) (int, error) {
 // original dst:443 БЕЗ расшифровки. Клиент не получает ни одного alert'а.
 var h2BypassN int64
 
+// FAIL-OPEN счётчики (GPT): h2_bypass, cert_bypass, failopen, direct ok/fail
+var (
+	directOkN    int64
+	directFailN  int64
+	certBypassN  int64
+	failopenN    int64
+)
+
+// Bypass-кэш: живёт одну VPN-сессию (процесс). SNI (или dst при пустом
+// SNI) -> true. Следующий reconnect к такому хосту идёт сразу direct.
+var (
+	bypassMu    sync.Mutex
+	bypassCache = make(map[string]bool)
+)
+
+func cacheBypass(key string) {
+	bypassMu.Lock()
+	bypassCache[key] = true
+	bypassMu.Unlock()
+}
+
+func isBypassed(sni, dst string) bool {
+	bypassMu.Lock()
+	defer bypassMu.Unlock()
+	if sni != "" && bypassCache[sni] {
+		return true
+	}
+	return bypassCache[dst]
+}
+
+// ClearBypassCache очищает кэш обхода (вызывается при старте/стопе сессии).
+func ClearBypassCache() {
+	bypassMu.Lock()
+	bypassCache = make(map[string]bool)
+	bypassMu.Unlock()
+}
+
 // sniffConn отдаёт TLS-серверу уже прочитанные байты (prefix) — raw-peek
 // не ломает пайплайн: tls.Server видит тот же ClientHello, что был в сети.
 type sniffConn struct {
@@ -908,23 +950,42 @@ func handle443(conn adapter.TCPConn, hp string) {
 			h1ok = true
 		}
 	}
-	if perr == nil && len(alpn) > 0 && !h1ok {
-		atomic.AddInt64(&h2BypassN, 1)
-		flowLog(fmt.Sprintf("#%d MITM_BYPASS reason=H2_UNSUPPORTED dst=%s sni=%q alpn=%v", fid, hp, peekSNI, alpn))
+	// goDirect — единый FAIL-OPEN путь: protected dial к original
+	// dst:443, реплей захваченного ClientHello, raw relay. Никакого
+	// TLS с нашей стороны — клиент не видит ни alert'ов, ни наших cert.
+	goDirect := func(tag string) {
 		up, err := dialTCP(hp)
 		if err != nil {
-			flowLog(fmt.Sprintf("#%d h2bypass dial FAIL %v", fid, err))
-			closeReason = "h2bypassDialX"
+			atomic.AddInt64(&directFailN, 1)
+			flowLog(fmt.Sprintf("#%d %s direct FAIL %v", fid, tag, err))
+			closeReason = tag + "X"
 			return
 		}
-		if _, werr := up.Write(raw); werr != nil {
-			_ = up.Close()
-			closeReason = "h2bypassWriteX"
-			return
+		if len(raw) > 0 {
+			if _, werr := up.Write(raw); werr != nil {
+				atomic.AddInt64(&directFailN, 1)
+				_ = up.Close()
+				closeReason = tag + "WriteX"
+				return
+			}
 		}
-		flowLog(fmt.Sprintf("#%d H2_BYPASS relay", fid))
-		closeReason = "h2bypassRelay"
+		atomic.AddInt64(&directOkN, 1)
+		flowLog(fmt.Sprintf("#%d %s relay dst=%s sni=%q", fid, tag, hp, peekSNI))
+		closeReason = tag
 		relay(conn, up)
+	}
+	// 1) h2-only клиент: MITM не умеет HTTP/2 -> сразу direct
+	if perr == nil && len(alpn) > 0 && !h1ok {
+		atomic.AddInt64(&h2BypassN, 1)
+		flowLog(fmt.Sprintf("#%d BYPASS_H2 sni=%q dst=%s alpn=%v", fid, peekSNI, hp, alpn))
+		goDirect("BYPASS_H2")
+		return
+	}
+	// 2) SNI/dst в bypass-кэше (cert reject / fail-open прошлого коннекта)
+	if perr == nil && isBypassed(peekSNI, hp) {
+		atomic.AddInt64(&certBypassN, 1)
+		flowLog(fmt.Sprintf("#%d BYPASS_PINNING sni=%q dst=%s", fid, peekSNI, hp))
+		goDirect("BYPASS_PINNING")
 		return
 	}
 	var gotBytes int64
@@ -948,6 +1009,38 @@ func handle443(conn adapter.TCPConn, hp string) {
 		// bytes>0 + alert unknown certificate => дело доверия CA
 		setErr(fmt.Errorf("cliTLS %s bytes=%d: %w", hp, gb, err))
 		flowLog(fmt.Sprintf("#%d cliTLS FAIL(%dB) sni=%q err=%v", fid, gb, sni, err))
+		// FAIL-OPEN (GPT): отказ от сертификата (pinning) или любая другая
+		// неизвестная ошибка MITM -> host уходит в bypass-кэш, и СЛЕДУЮЩИЙ
+		// reconnect к этому SNI/dst пойдёт сразу direct без расшифровки.
+		// Текущий (проваленный) TLS socket НЕ переиспользуем — просто закрыт.
+		es := err.Error()
+		certRej := strings.Contains(es, "unknown certificate") ||
+			strings.Contains(es, "bad certificate") ||
+			strings.Contains(es, "certificate required") ||
+			strings.Contains(es, "certificate verify failed") ||
+			strings.Contains(es, "unknownCertificate") ||
+			strings.Contains(es, "badCertificate")
+		key := sni
+		if key == "" {
+			key = peekSNI
+		}
+		if certRej {
+			atomic.AddInt64(&certBypassN, 1)
+			if key != "" {
+				cacheBypass(key)
+			} else {
+				cacheBypass(hp)
+			}
+			flowLog(fmt.Sprintf("#%d CERT_REJECT sni=%q dst=%s BYPASS_CACHE_ADD", fid, key, hp))
+		} else if gb > 0 && !errors.Is(err, io.EOF) {
+			atomic.AddInt64(&failopenN, 1)
+			if key != "" {
+				cacheBypass(key)
+			} else {
+				cacheBypass(hp)
+			}
+			flowLog(fmt.Sprintf("#%d MITM_FAIL_OPEN sni=%q dst=%s BYPASS_CACHE_ADD", fid, key, hp))
+		}
 		closeReason = "cliTLSfail"
 		return
 	}
