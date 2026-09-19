@@ -497,7 +497,8 @@ func MitmStats() string {
 		" blk " + strconv.FormatInt(atomic.LoadInt64(&blockedN), 10) +
 		" c2u " + strconv.FormatInt(atomic.LoadInt64(&c2uBytes), 10) +
 		" u2c " + strconv.FormatInt(atomic.LoadInt64(&u2cBytes), 10) +
-		" eofOK " + strconv.FormatInt(atomic.LoadInt64(&normalEOF), 10)
+		" eofOK " + strconv.FormatInt(atomic.LoadInt64(&normalEOF), 10) +
+		" h2bypass " + strconv.FormatInt(atomic.LoadInt64(&h2BypassN), 10)
 }
 
 // Своя фабрика сертификатов хостов (вместо goproxy TLSConfigFromCA —
@@ -719,6 +720,127 @@ func (c countWriter) Write(b []byte) (int, error) {
 	return m, err
 }
 
+// --- Этап 1: безопасный обход h2-only клиентов (GPT) ---
+// Пока полноценный HTTP/2 MITM не реализован, клиенты, предлагающие
+// ТОЛЬКО h2, НЕ роняем: читаем raw ClientHello до TLS, смотрим ALPN,
+// и если http/1.1 не допускается — делаем direct/protected relay к
+// original dst:443 БЕЗ расшифровки. Клиент не получает ни одного alert'а.
+var h2BypassN int64
+
+// sniffConn отдаёт TLS-серверу уже прочитанные байты (prefix) — raw-peek
+// не ломает пайплайн: tls.Server видит тот же ClientHello, что был в сети.
+type sniffConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (s *sniffConn) Read(p []byte) (int, error) {
+	if len(s.prefix) > 0 {
+		n := copy(p, s.prefix)
+		s.prefix = s.prefix[n:]
+		return n, nil
+	}
+	return s.Conn.Read(p)
+}
+
+// peekClientHello читает ПЕРВЫЙ TLS record (ClientHello) с сырого conn,
+// не отправляя ничего в ответ. Возвращает сырые байты + разобранные
+// SNI и ALPN. Ошибка = не TLS/таймаут — вызывающий сам решает.
+func peekClientHello(conn adapter.TCPConn) (raw []byte, sni string, alpn []string, err error) {
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	need := 5
+	for len(raw) < need {
+		buf := make([]byte, 4096)
+		n, rerr := conn.Read(buf)
+		if n > 0 {
+			raw = append(raw, buf[:n]...)
+		}
+		if rerr != nil {
+			return raw, "", nil, rerr
+		}
+	}
+	if len(raw) < 5 || raw[0] != 22 { // contentType handshake
+		return raw, "", nil, fmt.Errorf("not TLS (first byte %d)", raw[0])
+	}
+	recLen := int(raw[3])<<8 | int(raw[4])
+	if recLen < 4 || recLen > 16384 {
+		return raw, "", nil, fmt.Errorf("bad TLS record len %d", recLen)
+	}
+	need = 5 + recLen
+	for len(raw) < need {
+		buf := make([]byte, 4096)
+		n, rerr := conn.Read(buf)
+		if n > 0 {
+			raw = append(raw, buf[:n]...)
+		}
+		if rerr != nil && len(raw) < need {
+			return raw, "", nil, rerr
+		}
+	}
+	body := raw[5:need]
+	// handshake: type(1) len(3) client_version(2) random(32) ...
+	if len(body) < 4+2+32+1 || body[0] != 1 {
+		return raw, "", nil, fmt.Errorf("not ClientHello (type %d)", body[0])
+	}
+	i := 4 + 2 + 32
+	sidLen := int(body[i])
+	i += 1 + sidLen
+	if i+2 > len(body) {
+		return raw, "", nil, fmt.Errorf("short ClientHello")
+	}
+	csLen := int(body[i])<<8 | int(body[i+1])
+	i += 2 + csLen
+	if i+1 > len(body) {
+		return raw, "", nil, fmt.Errorf("short ClientHello")
+	}
+	cmLen := int(body[i])
+	i += 1 + cmLen
+	if i+2 > len(body) {
+		return raw, "", nil, fmt.Errorf("no extensions")
+	}
+	extLen := int(body[i])<<8 | int(body[i+1])
+	i += 2
+	end := i + extLen
+	if end > len(body) {
+		end = len(body)
+	}
+	for i+4 <= end {
+		et := int(body[i])<<8 | int(body[i+1])
+		el := int(body[i+2])<<8 | int(body[i+3])
+		i += 4
+		if i+el > end {
+			break
+		}
+		ed := body[i : i+el]
+		switch et {
+		case 0: // server_name
+			if len(ed) >= 5 {
+				l := int(ed[3])<<8 | int(ed[4])
+				if 5+l <= len(ed) {
+					sni = string(ed[5 : 5+l])
+				}
+			}
+		case 16: // ALPN
+			if len(ed) >= 2 {
+				total := int(ed[0])<<8 | int(ed[1])
+				j := 2
+				for j < 2+total && j < len(ed) {
+					sl := int(ed[j])
+					j++
+					if j+sl > len(ed) {
+						break
+					}
+					alpn = append(alpn, string(ed[j:j+sl]))
+					j += sl
+				}
+			}
+		}
+		i += el
+	}
+	return raw, sni, alpn, nil
+}
+
 // flowSeq — сквозной ID TCP:443 потока: каждое соединение логирует
 // свой жизненный цикл строками "#ID ..." — по требованию GPT одна
 // строка на этап: accepted / cliTLS / req+filter / upDial / upTLS / close.
@@ -776,8 +898,37 @@ func handle443(conn adapter.TCPConn, hp string) {
 			return certForName(name)
 		},
 	}
+	// --- Этап 1 (GPT): raw-peek ClientHello ДО TLS. Клиент, предлагающий
+	// только h2 (без http/1.1), идёт в direct/protected relay без
+	// расшифровки — ни одного alert'а, интернет не пропадает.
+	raw, peekSNI, alpn, perr := peekClientHello(conn)
+	h1ok := false
+	for _, p := range alpn {
+		if p == "http/1.1" {
+			h1ok = true
+		}
+	}
+	if perr == nil && len(alpn) > 0 && !h1ok {
+		atomic.AddInt64(&h2BypassN, 1)
+		flowLog(fmt.Sprintf("#%d MITM_BYPASS reason=H2_UNSUPPORTED dst=%s sni=%q alpn=%v", fid, hp, peekSNI, alpn))
+		up, err := dialTCP(hp)
+		if err != nil {
+			flowLog(fmt.Sprintf("#%d h2bypass dial FAIL %v", fid, err))
+			closeReason = "h2bypassDialX"
+			return
+		}
+		if _, werr := up.Write(raw); werr != nil {
+			_ = up.Close()
+			closeReason = "h2bypassWriteX"
+			return
+		}
+		flowLog(fmt.Sprintf("#%d H2_BYPASS relay", fid))
+		closeReason = "h2bypassRelay"
+		relay(conn, up)
+		return
+	}
 	var gotBytes int64
-	tlsConn := tls.Server(&countingConn{Conn: conn, n: &gotBytes}, cfg)
+	tlsConn := tls.Server(&sniffConn{Conn: &countingConn{Conn: conn, n: &gotBytes}, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
 	atomic.AddInt64(&cliHello, 1)
 	if err := tlsConn.Handshake(); err != nil {
