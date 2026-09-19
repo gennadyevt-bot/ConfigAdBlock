@@ -6,8 +6,8 @@ android {
         applicationId = "com.config.adblock"
         minSdk = 26
         targetSdk = 35
-        versionCode = 84
-        versionName = "0.5.74"
+        versionCode = 85
+        versionName = "0.5.75"
     }
     signingConfigs {
         create("release") {
