@@ -295,11 +295,17 @@ class FilterService : VpnService() {
             // мёртвый аплинк) и браузер не откатывается на IPv4 -> белые
             // страницы. Роутеры часто раздают глобальный v6 адрес при
             // дохлом провайдерском транзите — поэтому не «адрес есть», а пробник.
-            val cmV6 = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-            val lpV6 = cmV6.getLinkProperties(cmV6.activeNetwork)
-            val linkV6 = lpV6?.linkAddresses?.any {
-                it.address is java.net.Inet6Address && !it.address.isLinkLocalAddress && !it.address.isLoopbackAddress
-            } == true
+            // Любая ошибка здесь -> hasV6=false (безопасно: просто без ::/0)
+            var linkV6 = false
+            try {
+                val cmV6 = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val lpV6 = cmV6.getLinkProperties(cmV6.activeNetwork)
+                linkV6 = lpV6?.linkAddresses?.any {
+                    it.address is java.net.Inet6Address && !it.address.isLinkLocalAddress && !it.address.isLoopbackAddress
+                } == true
+            } catch (e: Exception) {
+                saveErr("VPN_CONFIG_V6 link-check FAIL: " + e.javaClass.simpleName)
+            }
             // Пробник — фоном, с кэшем 10 мин: кнопка ВКЛ не должна ждать
             // TCP-хендшейк. Первый запуск после смены сети берёт кэш,
             // фоновый поток обновит его для следующего включения.
