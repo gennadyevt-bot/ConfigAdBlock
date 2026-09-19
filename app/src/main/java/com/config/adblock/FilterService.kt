@@ -290,17 +290,33 @@ class FilterService : VpnService() {
                 " pkgs=" + (if (boCfg) "[com.android.chrome, com.yandex.browser]" else "[]"))
             // флаг для экрана диагностики: IPv6 завёрнут в туннель
             getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("ipv6_routed", true).apply()
+            // ::/0 маршрутизируем ТОЛЬКО если IPv6 реально ходит: иначе Chrome
+            // берёт AAAA, SYN уходит в TUN, исходящий dial падает (no route /
+            // мёртвый аплинк) и браузер не откатывается на IPv4 -> белые
+            // страницы. Роутеры часто раздают глобальный v6 адрес при
+            // дохлом провайдерском транзите — поэтому не «адрес есть», а пробник.
+            val cmV6 = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val lpV6 = cmV6.getLinkProperties(cmV6.activeNetwork)
+            val linkV6 = lpV6?.linkAddresses?.any {
+                it.address is java.net.Inet6Address && !it.address.isLinkLocalAddress && !it.address.isLoopbackAddress
+            } == true
+            val probeV6 = try {
+                java.net.Socket().use { s ->
+                    s.connect(java.net.InetSocketAddress("2001:4860:4860::8888", 443), 2500)
+                    true
+                }
+            } catch (_: Exception) { false }
+            val hasV6 = linkV6 && probeV6
+            saveErr("VPN_CONFIG_V6 link=" + linkV6 + " probe=" + probeV6 + " route=" + (if (hasV6) "ON" else "OFF"))
             val b = Builder()
                 .setSession("Config AdBlock HTTPS")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addRoute("0.0.0.0", 0)
-                // IPv6-перехват (0.5.50): tun2socks/gVisor v2.7.0 уже
-                // поддерживает v6 (promiscuous+spoofing, маршрут ::/0 в
-                // стеке). Весь IPv6 TCP придёт в HandleTCP -> тот же MITM;
-                // UDP/443 v6 падает в тот же drop -> откат браузера на TCP.
-                .addAddress("fd00:1:2:3::1", 128)
-                .addRoute("::", 0)
+            if (hasV6) {
+                b.addAddress("fd00:1:2:3::1", 128)
+                b.addRoute("::", 0)
+            }
                 // addDnsServer сознательно НЕ в цепочке: в режиме «только
                 // браузеры» VPN-DNS отравил бы резолвер ВСЕХ приложений
                 // (не-allowed физически не достигают 10.0.0.2). Ставим его
