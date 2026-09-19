@@ -1596,13 +1596,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			_, _ = conn.Write(resp)
 			return
 		}
-		if dom := dnsQueryDomain(buf[:n]); isDzenHost(dom) {
-			if ans := dzenFakeDNSAnswer(buf[:n]); ans != nil {
-				flowLog("DZEN_FAKEIP " + dom)
-				_, _ = conn.Write(ans)
-				return
-			}
-		}
+		// 0.6.0-content-test2: fake-IP delivery ОТКАЧЕН — dzen снова
+		// получает обычные реальные DNS-ответы
 		if dom := dnsQueryDomain(buf[:n]); dom != "" {
 			addDNSAllow(dom)
 		}
