@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"os"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -29,7 +30,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
-	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 )
 
 // Свой сетевой стек поверх Android TUN: TCP -> цепочка в goproxy (MITM),
@@ -170,9 +171,103 @@ func tlsDial(addr, serverName string) (net.Conn, error) {
 	return tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: serverName})
 }
 
+// --- Диагностика нижнего уровня TUN (GPT) ---
+// Счётчики реальных пакетов на fd НЕЗАВИСИМО от HandleTCP/HandleUDP.
+// Обёртка observation-only: gVisor читает те же байты через тот же Read.
+var (
+	tunRxPkts    int64
+	tunRxBytes   int64
+	tunTxPkts    int64
+	tunTxBytes   int64
+	tunV4        int64
+	tunV6        int64
+	tunProtoTCP  int64
+	tunProtoUDP  int64
+	tunProtoOth  int64
+	tunPktLogged int64
+)
+
+// tunCounter считает пакеты/байты на TUN fd и разбирает IP-заголовок
+// первых ~20 пакетов сессии (без payload).
+type tunCounter struct {
+	f *os.File
+}
+
+func (c *tunCounter) Read(p []byte) (int, error) {
+	n, err := c.f.Read(p)
+	if n > 0 {
+		atomic.AddInt64(&tunRxPkts, 1)
+		atomic.AddInt64(&tunRxBytes, int64(n))
+		analyzeTunPkt(p[:n])
+	}
+	return n, err
+}
+
+func (c *tunCounter) Write(p []byte) (int, error) {
+	n, err := c.f.Write(p)
+	if n > 0 {
+		atomic.AddInt64(&tunTxPkts, 1)
+		atomic.AddInt64(&tunTxBytes, int64(n))
+	}
+	return n, err
+}
+
+func analyzeTunPkt(b []byte) {
+	if len(b) < 20 {
+		return
+	}
+	ver := b[0] >> 4
+	proto := b[9] // IPv4 protocol
+	if ver == 6 {
+		atomic.AddInt64(&tunV6, 1)
+		if len(b) < 40 {
+			return
+		}
+		proto = b[6] // IPv6 next header (без обхода extension headers)
+	} else if ver == 4 {
+		atomic.AddInt64(&tunV4, 1)
+	} else {
+		atomic.AddInt64(&tunProtoOth, 1)
+	}
+	switch proto {
+	case 6:
+		atomic.AddInt64(&tunProtoTCP, 1)
+	case 17:
+		atomic.AddInt64(&tunProtoUDP, 1)
+	default:
+		atomic.AddInt64(&tunProtoOth, 1)
+	}
+	// первые 20 пакетов сессии — в журнал (без payload)
+	if atomic.LoadInt64(&tunPktLogged) < 20 {
+		src, dst := "?", "?"
+		if ver == 4 && len(b) >= 20 {
+			src = net.IP(b[12:16]).String()
+			dst = net.IP(b[16:20]).String()
+		} else if ver == 6 && len(b) >= 40 {
+			src = net.IP(b[8:24]).String()
+			dst = net.IP(b[24:40]).String()
+		}
+		atomic.AddInt64(&tunPktLogged, 1)
+		flowLog(fmt.Sprintf("TUN_PKT ver=%d proto=%d src=%s dst=%s len=%d", ver, proto, src, dst, len(b)))
+	}
+}
+
+// TunStats — строка счётчиков нижнего уровня TUN для экрана.
+func TunStats() string {
+	return "TUN rx=" + strconv.FormatInt(atomic.LoadInt64(&tunRxPkts), 10) +
+		" (" + strconv.FormatInt(atomic.LoadInt64(&tunRxBytes), 10) + "B)" +
+		" tx=" + strconv.FormatInt(atomic.LoadInt64(&tunTxPkts), 10) +
+		" (" + strconv.FormatInt(atomic.LoadInt64(&tunTxBytes), 10) + "B)" +
+		" | v4=" + strconv.FormatInt(atomic.LoadInt64(&tunV4), 10) +
+		" v6=" + strconv.FormatInt(atomic.LoadInt64(&tunV6), 10) +
+		" tcp=" + strconv.FormatInt(atomic.LoadInt64(&tunProtoTCP), 10) +
+		" udp=" + strconv.FormatInt(atomic.LoadInt64(&tunProtoUDP), 10) +
+		" oth=" + strconv.FormatInt(atomic.LoadInt64(&tunProtoOth), 10)
+}
+
 // StartTunnel поднимает стек на fd (TUN из establish().detachFd()).
 func StartTunnel(fd int64, mtu int64) error {
-	dev, err := fdbased.Open(strconv.Itoa(int(fd)), uint32(mtu), 0)
+	dev, err := iobased.New(&tunCounter{f: os.NewFile(uintptr(fd), "tun")}, uint32(mtu), 0)
 	if err != nil {
 		return err
 	}

@@ -282,6 +282,7 @@ class MainActivity : AppCompatActivity() {
         }
         val sst = prefs.getString("stackstats", "") ?: ""
         val mst = prefs.getString("mitmstats", "") ?: ""
+        val tst = prefs.getString("tunstats", "") ?: ""
         val cai = prefs.getString("cainfo", "") ?: ""
         val lfv = prefs.getString("leafverify", "") ?: ""
         val modeline = prefs.getString("modeline", "") ?: ""
@@ -298,7 +299,7 @@ class MainActivity : AppCompatActivity() {
         val lastLine = if (lastAt > sessAt && lastMst.isNotEmpty()) {
             "прошлая сессия @" + fmt.format(java.util.Date(lastAt)) + ": " + lastMst + " fb " + prefs.getLong("last_t443", 0) + " quic " + prefs.getLong("last_udp_seen", 0) + "/" + prefs.getLong("last_quic_drops", 0)
         } else ""
-        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + sessLine + "\n" + (if (v6line.isNotEmpty()) v6line + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + (if (lastLine.isNotEmpty()) lastLine + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
+        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + sessLine + "\n" + (if (v6line.isNotEmpty()) v6line + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (tst.isNotEmpty()) tst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + (if (lastLine.isNotEmpty()) lastLine + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
         val eerr = prefs.getString("eng_err", "") ?: ""
         val st = prefs.getString("selftest", "") ?: ""
         val pst = prefs.getString("proxy_state", "") ?: ""
@@ -343,9 +344,4 @@ class MainActivity : AppCompatActivity() {
                         btn.postDelayed({ updateUi() }, 500)
                     }
                 } catch (e: Exception) {
-                    logClick("ОШИБКА клика: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
-                }
-            }
-        }
-    }
-}
+                    logClick("ОШИБКА клика: " + 

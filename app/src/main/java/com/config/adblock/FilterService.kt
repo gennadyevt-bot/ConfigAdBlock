@@ -276,6 +276,17 @@ class FilterService : VpnService() {
             } catch (_: Exception) {}
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
+            // SESSION ID (GPT): инкремент ДО билдера, чтобы VPN_CONFIG и
+            // все диагностические строки несли номер своей сессии.
+            val sp0 = getSharedPreferences("stats", MODE_PRIVATE)
+            val sessN = sp0.getLong("sess_n", 0) + 1
+            sp0.edit().putLong("sess_n", sessN)
+                .putLong("sess_at", System.currentTimeMillis()).apply()
+            // Итоговая конфигурация VPN ДО establish (GPT: разбираем
+            // обход TUN браузером — нужно видеть, что реально в билдере)
+            saveErr("VPN_CONFIG sess=" + sessN + " mode=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL") +
+                " addrs=[10.0.0.2/32, fd00:1:2:3::1/128] routes=[0.0.0.0/0, ::/0] dns=[] mtu=1500" +
+                " pkgs=" + (if (browsersOnly) "[com.android.chrome, com.yandex.browser]" else "[]"))
             // флаг для экрана диагностики: IPv6 завёрнут в туннель
             getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("ipv6_routed", true).apply()
             val b = Builder()
@@ -407,11 +418,6 @@ class FilterService : VpnService() {
             }
             thread { try { mitm.Mitm.netSelfTest() } catch (_: Exception) {} }
             saveErr("4/5 туннель поднят, фильтр работает")
-            // SESSION ID (GPT): чтобы нули новой сессии не путать с
-            // реальным отсутствием трафика в прошлой.
-            val sp0 = getSharedPreferences("stats", MODE_PRIVATE)
-            sp0.edit().putLong("sess_n", sp0.getLong("sess_n", 0) + 1)
-                .putLong("sess_at", System.currentTimeMillis()).apply()
             while (running) {
                 try {
                     Thread.sleep(2000)
@@ -438,6 +444,7 @@ class FilterService : VpnService() {
                         .putString("selftest", mitm.Mitm.selfTestResult())
                         .putString("flowlog", mitm.Mitm.flowLog())
                         .putString("stackstats", mitm.Mitm.stackStats())
+                        .putString("tunstats", mitm.Mitm.tunStats())
                         .putLong("gp_ok", mitm.Mitm.gpOkExt())
                         .putLong("gp_fail", mitm.Mitm.gpFailExt())
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
@@ -512,6 +519,7 @@ class FilterService : VpnService() {
             while (tries < 3 && localTun == null && running) {
                 tries++
                 localTun = try { b.establish() } catch (e: Exception) { saveErr("VPN слот: " + (e.message ?: "ошибка")); null }
+                if (localTun != null) saveErr("VPN_ESTABLISHED fd ok")
                 if (localTun == null) {
                     saveErr("Слот недоступен. Переспрашиваю разрешение ($tries/3)...")
                     try {
