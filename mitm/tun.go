@@ -423,6 +423,13 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 
 	// Не-TLS порты — напрямую. TCP/443 всегда проходит SNI-фильтр;
 	// старый отладочный флаг не должен обходить SAFE MODE.
+	// 0.5.81 (GPT): НИКОГДА не использовать виртуальные адреса нашего
+	// VPN как upstream. TCP к 10.0.0.1/10.0.0.2 (Android Private DNS
+	// стучится на 10.0.0.1:853) — мгновенный отказ, без timeout-петли.
+	if host == "10.0.0.1" || host == "10.0.0.2" {
+		flowLog("SELF_DST_DROP dst=" + hp)
+		return
+	}
 	if port != 443 {
 		atomic.AddInt64(&directCnt, 1)
 		dfam := "v4"
