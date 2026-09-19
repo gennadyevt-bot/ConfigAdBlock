@@ -889,6 +889,45 @@ func peekClientHello(conn adapter.TCPConn) (raw []byte, sni string, alpn []strin
 // строка на этап: accepted / cliTLS / req+filter / upDial / upTLS / close.
 var flowSeq int64
 
+// --- SNI-лог 0.5.73 (GPT, диагностика): последние ~150 SNI в SAFE MODE
+// с вердиктом BLOCK/DIRECT. Видимый список на экране, очищается при
+// каждом запуске VPN. Ничего не блокирует сам по себе.
+var (
+	sniLogMu  sync.Mutex
+	sniLogBuf []string
+)
+
+func addSNILog(verdict, sni string) {
+	if sni == "" {
+		return
+	}
+	sniLogMu.Lock()
+	defer sniLogMu.Unlock()
+	sniLogBuf = append(sniLogBuf, verdict+"  "+sni)
+	if len(sniLogBuf) > 150 {
+		sniLogBuf = sniLogBuf[len(sniLogBuf)-150:]
+	}
+}
+
+// ResetSNILog очищает список — вызывается при старте VPN.
+func ResetSNILog() {
+	sniLogMu.Lock()
+	sniLogBuf = nil
+	sniLogMu.Unlock()
+}
+
+// SNILog — список для экрана, свежие записи сверху.
+func SNILog() string {
+	sniLogMu.Lock()
+	defer sniLogMu.Unlock()
+	var sb strings.Builder
+	for i := len(sniLogBuf) - 1; i >= 0; i-- {
+		sb.WriteString(sniLogBuf[i])
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 // handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
 // наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
@@ -982,15 +1021,18 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// напрямую. Так браузеру всегда показывается настоящий сертификат.
 	if perr == nil && peekSNI != "" && isBlocked(peekSNI) {
 		atomic.AddInt64(&blockedN, 1)
+		addSNILog("BLOCK", peekSNI)
 		flowLog(fmt.Sprintf("#%d SAFE_BLOCK_SNI sni=%q dst=%s", fid, peekSNI, hp))
 		closeReason = "safeBlockSNI"
 		return
 	}
 	if perr != nil {
+		addSNILog("DIRECT", "(no-sni) "+hp)
 		flowLog(fmt.Sprintf("#%d SAFE_DIRECT_UNKNOWN dst=%s peek=%v", fid, hp, perr))
 		goDirect("SAFE_DIRECT_UNKNOWN")
 		return
 	}
+	addSNILog("DIRECT", peekSNI)
 	flowLog(fmt.Sprintf("#%d SAFE_DIRECT sni=%q dst=%s", fid, peekSNI, hp))
 	goDirect("SAFE_DIRECT")
 	return
