@@ -381,7 +381,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	port := int(id.LocalPort)
 	hp := net.JoinHostPort(host, strconv.Itoa(port))
 	// GPT: раздельные счётчики IPv4/IPv6 TCP и 443
-	isV6 := strings.Contains(host, ":")
+	isV6 := strings.Count(host, ":") > 1 // v6-литерал содержит минимум 2 двоеточия
 	if isV6 {
 		atomic.AddInt64(&tcp6N, 1)
 	} else {
@@ -400,7 +400,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	if port != 443 || direct443On() {
 		atomic.AddInt64(&directCnt, 1)
 		dfam := "v4"
-		if strings.Contains(hp, ":") {
+		if strings.Count(hp, ":") > 1 {
 			dfam = "v6"
 		}
 		flowLog(fmt.Sprintf("tcp dst=%s fam=%s direct", hp, dfam))
@@ -903,7 +903,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 	}()
 	atomic.AddInt64(&acceptedN, 1)
 	fam := "v4"
-	if strings.Contains(hp, ":") {
+	if strings.Count(hp, ":") > 1 {
 		fam = "v6" // GPT: семейство адреса в каждом соединении
 	}
 	flowLog(fmt.Sprintf("#%d dst=%s fam=%s accepted", fid, hp, fam))
@@ -1474,7 +1474,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Счётчики: udpTry = ВСЕ UDP-пакеты, udpSeen = уникальные потоки UDP.
 	atomic.AddInt64(&udpSeen, 1)
 	ufam := "v4"
-	if strings.Contains(id.LocalAddress.String(), ":") {
+	if strings.Count(id.LocalAddress.String(), ":") > 1 {
 		ufam = "v6"
 	}
 	flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
@@ -1484,7 +1484,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Браузер откатывается на TCP/443 -> уже рабочий MITM-пайплайн.
 	if id.LocalPort == 443 {
 		atomic.AddInt64(&quicDrops, 1)
-		if strings.Contains(id.LocalAddress.String(), ":") {
+		if strings.Count(id.LocalAddress.String(), ":") > 1 {
 			atomic.AddInt64(&udp443v6N, 1)
 		} else {
 			atomic.AddInt64(&udp443v4N, 1)
