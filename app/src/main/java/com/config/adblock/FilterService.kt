@@ -352,12 +352,10 @@ class FilterService : VpnService() {
             getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("browsers_only", true).apply()
             val browsersOnly = true
             saveErr("MODE=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL"))
-            try {
-                b.addDisallowedApplication(packageName)
-                saveErr("DISALLOWED_SELF_OK " + packageName)
-            } catch (e: Exception) {
-                saveErr("DISALLOWED_SELF_FAIL " + e.javaClass.simpleName + ": " + (e.message ?: "?"))
-            }
+            // 0.5.68 (GPT): в BROWSER_ONLY НЕ вызываем addDisallowedApplication
+            // вообще — чистый allowlist. Смешение allowed+disallowed на части
+            // прошивок даёт непредсказуемый захват. Disallow-self остаётся
+            // только в ветке ALL (ниже).
             if (browsersOnly) {
                 var cnt = 0
                 for (pkg in listOf("com.android.chrome", "com.yandex.browser")) {
