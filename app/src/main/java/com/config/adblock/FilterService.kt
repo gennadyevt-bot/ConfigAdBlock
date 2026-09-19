@@ -10,6 +10,8 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import java.io.File
@@ -276,6 +278,15 @@ class FilterService : VpnService() {
             } catch (_: Exception) {}
             // MTU ОБЯЗАН совпадать со стеком (8500): иначе стек шлёт
             // пакеты больше интерфейса и TUN их молча дропает — «интернета нет»
+            // TEST FAILSAFE 0.5.69: аварийный автостоп через 30 с после
+            // нажатия ВКЛЮЧИТЬ — при неудачном тесте интернет гарантированно
+            // вернётся и можно снова включить обычный VPN.
+            Handler(Looper.getMainLooper()).postDelayed({
+                saveErr("TEST FAILSAFE: автостоп через 30с")
+                try {
+                    startService(Intent(this@FilterService, FilterService::class.java).setAction("STOP"))
+                } catch (_: Exception) {}
+            }, 30_000)
             // SESSION ID (GPT): инкремент ДО билдера, чтобы VPN_CONFIG и
             // все диагностические строки несли номер своей сессии.
             val sp0 = getSharedPreferences("stats", MODE_PRIVATE)
