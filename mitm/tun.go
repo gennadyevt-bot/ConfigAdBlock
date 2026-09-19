@@ -1542,7 +1542,11 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	if id.LocalPort == 443 {
 		flowLog("QUIC_PASS dst=" + id.LocalAddress.String())
 	}
-	// прочий UDP: прямой релей в апстрим (dst из заголовка потока)
+	// прочий UDP: ПОЛНЫЙ ДУПЛЕКС (0.5.76 GPT) — первый пакет ушёл в up
+	// выше, дальше два независимых направления с разными буферами:
+	//   conn -> up  (фоновая горутина читает новые датаграммы клиента)
+	//   up   -> conn (основной цикл отдаёт ответы апстрима)
+	// При ошибке или таймауте (60 с простоя) поток закрывается целиком.
 	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	up, err := dialUDP(dst)
 	if err != nil {
@@ -1553,17 +1557,29 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		return
 	}
 	atomic.AddInt64(&quicRelays, 1)
-	_ = up.SetReadDeadline(time.Now().Add(30 * time.Second))
+
+	go func() {
+		cbuf := make([]byte, 64*1024)
+		for {
+			cn, cerr := conn.Read(cbuf)
+			if cerr != nil || cn <= 0 {
+				return
+			}
+			if _, werr := up.Write(cbuf[:cn]); werr != nil {
+				return
+			}
+		}
+	}()
+
 	rbuf := make([]byte, 64*1024)
 	for {
-		rn, err := up.Read(rbuf)
-		if err != nil || rn <= 0 {
+		_ = up.SetReadDeadline(time.Now().Add(60 * time.Second))
+		rn, rerr := up.Read(rbuf)
+		if rerr != nil || rn <= 0 {
 			return
 		}
-		if _, err := conn.Write(rbuf[:rn]); err != nil {
+		if _, werr := conn.Write(rbuf[:rn]); werr != nil {
 			return
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_ = up.SetReadDeadline(time.Now().Add(30 * time.Second))
 	}
 }
