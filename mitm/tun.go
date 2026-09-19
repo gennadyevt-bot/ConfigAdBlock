@@ -1047,6 +1047,14 @@ func handle443(conn adapter.TCPConn, hp string) {
 	atomic.AddInt64(&cliTLSOk, 1)
 	_ = tlsConn.SetDeadline(time.Time{})
 	flowLog(fmt.Sprintf("#%d cliTLS ok sni=%q", fid, sni))
+	// FAIL-OPEN upstream (GPT, STABLE TRANSPORT): любая ошибка апстрима
+	// НЕ должна означать обрыв страницы. Вместо 502: host в bypass-кэш,
+	// следующий reconnect к нему пойдёт direct без MITM.
+	failOpenUp := func(tag, host string, e error) {
+		atomic.AddInt64(&failopenN, 1)
+		cacheBypass(host)
+		flowLog(fmt.Sprintf("#%d FAIL_OPEN_UP %s host=%s: %v BYPASS_CACHE_ADD", fid, tag, host, e))
+	}
 	closeReason = "cliClose"
 	br := bufio.NewReader(tlsConn)
 	for {
@@ -1132,7 +1140,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 				atomic.AddInt64(&upDialFail, 1)
 				setErr(fmt.Errorf("upDial %s: %v / %v", hp, err, lerr))
 				flowLog(fmt.Sprintf("#%d upDial FAIL %v/%v", fid, err, lerr))
-				write502(tlsConn)
+				failOpenUp("upDial", serverName, fmt.Errorf("%v/%v", err, lerr))
 				closeReason = "upDialX"
 				return
 			}
@@ -1141,7 +1149,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 				atomic.AddInt64(&upDialFail, 1)
 				setErr(fmt.Errorf("upDial %s: %w", hp, err))
 				flowLog(fmt.Sprintf("#%d upDial FAIL %v", fid, err))
-				write502(tlsConn)
+				failOpenUp("upDial", serverName, err)
 				closeReason = "upDialX"
 				return
 			}
@@ -1154,7 +1162,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			setErr(fmt.Errorf("upTLS %s: %w", serverName, err))
 			flowLog(fmt.Sprintf("#%d upTLS FAIL %v", fid, err))
 			_ = up.Close()
-			write502(tlsConn)
+			failOpenUp("upTLS", serverName, err)
 			closeReason = "upTLSX"
 			return
 		}
@@ -1181,7 +1189,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			_ = up.Close()
 			setErr(fmt.Errorf("upRead %s: %w", serverName, err))
 			flowLog(fmt.Sprintf("#%d upRead FAIL %v", fid, err))
-			write502(tlsConn)
+			failOpenUp("upRead", serverName, err)
 			closeReason = "upReadX"
 			return
 		}
