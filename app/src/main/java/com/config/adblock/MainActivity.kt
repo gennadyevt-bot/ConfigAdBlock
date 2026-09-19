@@ -283,6 +283,11 @@ class MainActivity : AppCompatActivity() {
         if (sniLog.isNotEmpty()) {
             logText = logText + "\n--- SNI (последние, сверху новые) ---\n" + sniLog
         }
+        // 0.5.79 (GPT): видимый список разрешённых DNS-доменов
+        val dnsAllow = prefs.getString("dnsallow", "") ?: ""
+        if (dnsAllow.isNotEmpty()) {
+            logText = logText + "\n--- DNS_ALLOW (последние, сверху новые) ---\n" + dnsAllow
+        }
         val sst = prefs.getString("stackstats", "") ?: ""
         val mst = prefs.getString("mitmstats", "") ?: ""
         val tst = prefs.getString("tunstats", "") ?: ""
