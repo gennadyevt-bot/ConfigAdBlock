@@ -1104,6 +1104,16 @@ func handle443(conn adapter.TCPConn, hp string) {
 		closeReason = "safeBlockSNI"
 		return
 	}
+	// 0.6.0-content: delivery-слой ТОЛЬКО dzen.ru (fake-IP 10.0.0.3)
+	if hostOnly == dzenFakeIP {
+		if perr == nil {
+			handleDzenMITM(conn, peekSNI)
+		} else {
+			flowLog(fmt.Sprintf("#%d DZEN_PEEK_FAIL dst=%s err=%v", fid, hp, perr))
+		}
+		closeReason = "dzenMitm"
+		return
+	}
 	if perr != nil {
 		addSNILog("DIRECT", "(no-sni) "+hp)
 		flowLog(fmt.Sprintf("#%d SAFE_DIRECT_UNKNOWN dst=%s peek=%v", fid, hp, perr))
@@ -1586,6 +1596,13 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			_, _ = conn.Write(resp)
 			return
 		}
+		if dom := dnsQueryDomain(buf[:n]); isDzenHost(dom) {
+			if ans := dzenFakeDNSAnswer(buf[:n]); ans != nil {
+				flowLog("DZEN_FAKEIP " + dom)
+				_, _ = conn.Write(ans)
+				return
+			}
+		}
 		if dom := dnsQueryDomain(buf[:n]); dom != "" {
 			addDNSAllow(dom)
 		}
@@ -1635,6 +1652,11 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// пропускаем обычным protected UDP relay, как остальной UDP.
 	if id.LocalPort == 443 {
 		flowLog("QUIC_PASS dst=" + id.LocalAddress.String())
+	}
+	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
+	if id.LocalAddress.String() == dzenFakeIP {
+		flowLog("QUIC_FAKEIP_DROP dst=" + id.LocalAddress.String())
+		return
 	}
 	// прочий UDP: ПОЛНЫЙ ДУПЛЕКС (0.5.76 GPT) — первый пакет ушёл в up
 	// выше, дальше два независимых направления с разными буферами:
