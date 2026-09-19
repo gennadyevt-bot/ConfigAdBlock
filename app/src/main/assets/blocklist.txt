@@ -49721,3 +49721,15 @@ yandex.ru/ads/
 # Режем подачу рекламы, сайты рекламодателей не трогаем.
 adfox.ru
 yandexadexchange.net
+# Confirmed domain rules from AdGuard DNS filter (filter 15), 2026-09-19.
+# https://filters.adtidy.org/extension/chromium/filters/15.txt
+# Observed in the Lenta test: wcm.weborama-tech.ru, sync.1dmp.io, st.top100.ru.
+weborama-tech.ru
+1dmp.io
+st.top100.ru
+kraken.rambler.ru
+ad2.rambler.ru
+ad3.rambler.ru
+rcmjs.rambler.ru
+redsquare.rambler.ru
+adfox.yandex.ru
