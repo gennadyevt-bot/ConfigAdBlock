@@ -287,6 +287,14 @@ class FilterService : VpnService() {
                 .putLong("sess_at", System.currentTimeMillis()).apply()
             // 0.5.73: список SNI очищается при каждом запуске VPN
             try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
+            // TEST FAILSAFE 0.5.74: аварийный автостоп через 30 с —
+            // при проблеме интернет гарантированно вернётся сам
+            Handler(Looper.getMainLooper()).postDelayed({
+                saveErr("TEST FAILSAFE: автостоп через 30с")
+                try {
+                    startService(Intent(this@FilterService, FilterService::class.java).setAction("STOP"))
+                } catch (_: Exception) {}
+            }, 30_000)
             // Итоговая конфигурация VPN ДО establish (GPT: разбираем
             // обход TUN браузером — нужно видеть, что реально в билдере)
             val boCfg = try { sp0.getBoolean("browsers_only", true) } catch (_: Exception) { true }
@@ -351,12 +359,12 @@ class FilterService : VpnService() {
             // 0.5.66 (GPT): контрольная сборка снова BROWSER_ONLY —
             // отделяем проблему глобального захвата от DNS. Пробник v6 и
             // запрет самому себе остаются в любом режиме.
-            // контрольная сборка 0.5.67: принудительно BROWSER_ONLY —
-            // в эпоху ALL_APPS_DIAG в настройках осталось browsers_only=false,
-            // и 0.5.66 честно ушла в MODE=ALL
-            getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("browsers_only", true).apply()
-            val browsersOnly = true
-            saveErr("MODE=" + (if (browsersOnly) "BROWSER_ONLY" else "ALL"))
+            // 0.5.74 TEST (GPT): режим ВСЕ ПРИЛОЖЕНИЯ — allowlist убран,
+            // захват всех приложений и любых браузеров/WebView; себя
+            // исключаем через addDisallowedApplication ниже, пользовательские
+            // исключения applyExclusions сохранены
+            val browsersOnly = false
+            saveErr("MODE=ALL")
             // 0.5.68 (GPT): в BROWSER_ONLY НЕ вызываем addDisallowedApplication
             // вообще — чистый allowlist. Смешение allowed+disallowed на части
             // прошивок даёт непредсказуемый захват. Disallow-self остаётся
