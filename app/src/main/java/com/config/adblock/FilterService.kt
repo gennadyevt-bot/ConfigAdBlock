@@ -339,8 +339,8 @@ class FilterService : VpnService() {
                 .setSession("Config AdBlock DNS")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
-                .addDnsServer("10.0.0.2")
-                .addRoute("10.0.0.2", 32)
+                .addDnsServer("10.0.0.1")
+                .addRoute("10.0.0.1", 32)
             try {
                 b.addDisallowedApplication(packageName)
                 saveErr("DISALLOWED_SELF_OK " + packageName)
