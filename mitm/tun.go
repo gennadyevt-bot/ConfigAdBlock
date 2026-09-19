@@ -914,6 +914,52 @@ func peekClientHello(conn adapter.TCPConn) (raw []byte, sni string, alpn []strin
 // строка на этап: accepted / cliTLS / req+filter / upDial / upTLS / close.
 var flowSeq int64
 
+// --- DNS_ALLOW 0.5.79 (GPT, диагностика): последние 100-150 УНИКАЛЬНЫХ
+// разрешённых доменов. Очищается при каждом запуске VPN. Блокировки нет.
+var (
+	dnsAllowMu  sync.Mutex
+	dnsAllowSet = make(map[string]bool)
+	dnsAllowBuf []string
+)
+
+func addDNSAllow(dom string) {
+	if dom == "" {
+		return
+	}
+	dnsAllowMu.Lock()
+	defer dnsAllowMu.Unlock()
+	if dnsAllowSet[dom] {
+		return
+	}
+	dnsAllowSet[dom] = true
+	dnsAllowBuf = append(dnsAllowBuf, dom)
+	if len(dnsAllowBuf) > 150 {
+		delete(dnsAllowSet, dnsAllowBuf[0])
+		dnsAllowBuf = dnsAllowBuf[1:]
+	}
+}
+
+// ResetDNSAllowLog очищает список — вызывается при старте VPN.
+func ResetDNSAllowLog() {
+	dnsAllowMu.Lock()
+	dnsAllowSet = make(map[string]bool)
+	dnsAllowBuf = nil
+	dnsAllowMu.Unlock()
+}
+
+// DNSAllowLog — список для экрана, свежие записи сверху.
+func DNSAllowLog() string {
+	dnsAllowMu.Lock()
+	defer dnsAllowMu.Unlock()
+	var sb strings.Builder
+	for i := len(dnsAllowBuf) - 1; i >= 0; i-- {
+		sb.WriteString("DNS_ALLOW ")
+		sb.WriteString(dnsAllowBuf[i])
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 // --- SNI-лог 0.5.73 (GPT, диагностика): последние ~150 SNI в SAFE MODE
 // с вердиктом BLOCK/DIRECT. Видимый список на экране, очищается при
 // каждом запуске VPN. Ничего не блокирует сам по себе.
@@ -1532,6 +1578,9 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			resp = append(resp, buf[12:n]...) // question как есть
 			_, _ = conn.Write(resp)
 			return
+		}
+		if dom := dnsQueryDomain(buf[:n]); dom != "" {
+			addDNSAllow(dom)
 		}
 		key := string(buf[:n])
 		if cached, ok := dnsCacheGet(key); ok {
