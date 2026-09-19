@@ -11,43 +11,43 @@
         android:strokeWidth="5.69"
         android:pathData="M54,17.09 A36.91,36.91 0,1 1,53.99 17.09"/>
 
-    <!-- A: жирные ножки с плоской вершиной, round join (Arial Black стиль) -->
+    <!-- A: крупная, как "VPN" на иконке Config VPN -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="7"
+        android:strokeWidth="9"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M37,71 L45.5,39 H48 L58,71"/>
+        android:pathData="M36,74 L46,32 H48 L58,74"/>
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="6.5"
+        android:strokeWidth="8"
         android:strokeLineCap="round"
-        android:pathData="M42.5,60 H53"/>
+        android:pathData="M41,60 H52"/>
 
-    <!-- D: стойка + круглая чаша штрихом, round join -->
+    <!-- D -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="7"
+        android:strokeWidth="9"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M65,39 V71"/>
+        android:pathData="M68,32 V74"/>
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="7"
+        android:strokeWidth="9"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M65,39 C75,39 79.5,45 79.5,55 C79.5,65 75,71 65,71"/>
+        android:pathData="M68,32 C78,32 82,38 82,53 C82,68 78,74 68,74"/>
 
-    <!-- Диагональная запрещающая линия -->
+    <!-- Диагональная запрещающая линия: теперь сверху-слева вниз-вправо -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
         android:strokeWidth="5.69"
         android:strokeLineCap="round"
-        android:pathData="M31.11,79.59 L79.59,31.11"/>
+        android:pathData="M31.11,31.11 L79.59,79.59"/>
 
 </vector>
