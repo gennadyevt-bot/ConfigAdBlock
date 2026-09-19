@@ -326,6 +326,18 @@ var (
 	normalEOF  int64
 )
 
+// isYandexAdHost — домены рекламной СИСТЕМЫ (Adfox / Yandex Ad Exchange),
+// а не рекламодателей. По документации Adfox рекламная загрузка идёт
+// через них; блокируем их, а не сайты типа rsvx.ru/myrecruit.ru.
+func isYandexAdHost(host string) bool {
+	h := strings.ToLower(host)
+	if i := strings.LastIndex(h, ":"); i >= 0 {
+		h = h[:i] // отрезаем порт
+	}
+	return h == "adfox.ru" || strings.HasSuffix(h, ".adfox.ru") ||
+		h == "yandexadexchange.net" || strings.HasSuffix(h, ".yandexadexchange.net")
+}
+
 // adSuspicion возвращает причину подозрения на рекламу (или "").
 // НИЧЕГО не блокирует — только помечает запрос в журнале строкой ADS?.
 func adSuspicion(host, path string) string {
@@ -342,6 +354,8 @@ func adSuspicion(host, path string) string {
 		return "lenta-adserver"
 	case strings.Contains(h, "inverga"):
 		return "inverga-ad"
+	case strings.Contains(h, "yandexadexchange"):
+		return "yandex-ad-exchange"
 	case strings.Contains(p, "click"):
 		return "click-path"
 	case strings.HasPrefix(p, "/clck/"):
@@ -710,10 +724,20 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if len(ref) > 50 {
 			ref = ref[:50]
 		}
+		// ADSOURCE: явная пометка обращений к рекламной системе (GPT).
+		// Домены рекламодателей (rsvx.ru, myrecruit.ru и т.п.) сюда НЕ входят.
+		yad := isYandexAdHost(host)
+		if yad {
+			flowLog(fmt.Sprintf("#%d ADSOURCE host=%s path=%s method=%s", fid, host, path, req.Method))
+		}
 		blocked, rule := checkURL(req.Host, req.URL.Path)
 		if blocked {
 			atomic.AddInt64(&blockedN, 1)
-			flowLog(fmt.Sprintf("#%d req %s host=%s path=%s ref=%q FILTER=BLOCK rule=%q", fid, req.Method, host, path, ref, rule))
+			reason := rule
+			if yad {
+				reason = "YANDEX_AD_SOURCE:" + rule
+			}
+			flowLog(fmt.Sprintf("#%d req %s host=%s path=%s ref=%q FILTER=BLOCK rule=%q reason=%s", fid, req.Method, host, path, ref, rule, reason))
 			resp := &http.Response{StatusCode: 403, Status: "403 Forbidden", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), ContentLength: 0, Close: true}
 			resp.Header.Set("Content-Type", "text/html")
 			_ = resp.Write(countWriter{w: tlsConn, n: &u2cBytes})

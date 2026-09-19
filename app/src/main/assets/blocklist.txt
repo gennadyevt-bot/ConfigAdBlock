@@ -49717,3 +49717,7 @@ zzz.onion.pet
 an.yandex.ru
 # Рекламный эндпоинт общего домена: режем только /ads/, поиск и clck живут
 yandex.ru/ads/
+# Рекламная СИСТЕМА Adfox / Yandex Ad Exchange (документация Adfox).
+# Режем подачу рекламы, сайты рекламодателей не трогаем.
+adfox.ru
+yandexadexchange.net
