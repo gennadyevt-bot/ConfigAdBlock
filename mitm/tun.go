@@ -921,6 +921,22 @@ func peekClientHello(conn adapter.TCPConn) (raw []byte, sni string, alpn []strin
 // строка на этап: accepted / cliTLS / req+filter / upDial / upTLS / close.
 var flowSeq int64
 
+// contentFilterOn: SELECTIVE content-слой (0.6.0-content4).
+// 1 = mini-MITM только для белого списка (dzen), остальное SAFE_DIRECT;
+// 0 = чистый DNS_ONLY (TCP в движок даже не приходит по маршрутам).
+var contentFilterOn int64 = 1
+
+// SetContentFilter переключает слой (вызывается из Kotlin при старте).
+func SetContentFilter(on bool) {
+	if on {
+		atomic.StoreInt64(&contentFilterOn, 1)
+	} else {
+		atomic.StoreInt64(&contentFilterOn, 0)
+	}
+}
+
+func contentFilterEnabled() bool { return atomic.LoadInt64(&contentFilterOn) == 1 }
+
 // --- DNS_ALLOW 0.5.79 (GPT, диагностика): последние 100-150 УНИКАЛЬНЫХ
 // разрешённых доменов. Очищается при каждом запуске VPN. Блокировки нет.
 var (
@@ -1104,14 +1120,13 @@ func handle443(conn adapter.TCPConn, hp string) {
 		closeReason = "safeBlockSNI"
 		return
 	}
-	// 0.6.0-content: delivery-слой ТОЛЬКО dzen.ru (fake-IP 10.0.0.3)
-	if hostOnly == dzenFakeIP {
-		if perr == nil {
-			handleDzenMITM(conn, peekSNI)
-		} else {
-			flowLog(fmt.Sprintf("#%d DZEN_PEEK_FAIL dst=%s err=%v", fid, hp, perr))
-		}
-		closeReason = "dzenMitm"
+	// 0.6.0-content4: SELECTIVE content-filter по SNI — БЕЗ fake-IP.
+	// Реальный DNS-ответ прошёл клиенту как есть; перехватываем TCP:443
+	// только к белым доменам и делаем mini-MITM с инжектом CSS.
+	if perr == nil && contentFilterEnabled() && isDzenHost(peekSNI) {
+		flowLog(fmt.Sprintf("#%d CONTENT_MITM sni=%q dst=%s", fid, peekSNI, hp))
+		handleDzenMITM(conn, peekSNI)
+		closeReason = "contentMitm"
 		return
 	}
 	if perr != nil {
@@ -1646,7 +1661,9 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// UDP/443 (QUIC/HTTP3) — ВРЕМЕННЫЙ ТЕСТ 0.5.75 (GPT): НЕ дропаем,
 	// пропускаем обычным protected UDP relay, как остальной UDP.
 	if id.LocalPort == 443 {
-		flowLog("QUIC_PASS dst=" + id.LocalAddress.String())
+		atomic.AddInt64(&quicDrops, 1)
+		flowLog("QUIC_DROP dst=" + id.LocalAddress.String())
+		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {

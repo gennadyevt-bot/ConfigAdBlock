@@ -287,6 +287,7 @@ class FilterService : VpnService() {
                 .putLong("sess_at", System.currentTimeMillis()).apply()
             // 0.5.73: список SNI очищается при каждом запуске VPN
             try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
+            try { mitm.Mitm.setContentFilter(contentFilter) } catch (_: Exception) {}
             // 0.5.79: список DNS_ALLOW тоже очищается при старте VPN
             try { mitm.Mitm.resetDNSAllowLog() } catch (_: Exception) {}
             // 0.5.75: аварийный автостоп убран — пользователь выключает сам
@@ -337,12 +338,30 @@ class FilterService : VpnService() {
             // Через TUN идёт ТОЛЬКО DNS (маршрут ровно на 10.0.0.2/32).
             // Весь обычный TCP/UDP/QUIC идёт напрямую через сеть Android.
             // Никаких addAllowedApplication; себя исключаем от петли.
+            // 0.6.0-content4: два режима одной кнопкой.
+            //  content_filter=true  -> SELECTIVE_CONTENT: полный v4-маршрут,
+            //     mini-MITM ТОЛЬКО для доменов белого списка (по SNI, dzen
+            //     первый), всё остальное SAFE_DIRECT. Без fake-IP.
+            //  content_filter=false -> стабильный DNS_ONLY как в 0.5.81.
+            val contentFilter = sp0.getBoolean("content_filter", true)
             val b = Builder()
-                .setSession("Config AdBlock DNS")
+                .setSession("Config AdBlock")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer("10.0.0.1")
                 .addRoute("10.0.0.1", 32)
+            if (contentFilter) {
+                b.addRoute("0.0.0.0", 0)
+                if (hasV6) {
+                    b.addAddress("fd00:1:2:3::1", 128)
+                    b.addRoute("::", 0)
+                }
+                saveErr("MODE=SELECTIVE_CONTENT v6route=" + (if (hasV6) "ON" else "OFF"))
+            } else {
+                saveErr("MODE=DNS_ONLY_ALL_APPS")
+            }
+            getSharedPreferences("stats", MODE_PRIVATE).edit()
+                .putString("modeline", (if (contentFilter) "MODE=SELECTIVE_CONTENT" else "MODE=DNS_ONLY_ALL_APPS")).apply()
             try {
                 b.addDisallowedApplication(packageName)
                 saveErr("DISALLOWED_SELF_OK " + packageName)
@@ -350,9 +369,6 @@ class FilterService : VpnService() {
                 saveErr("DISALLOWED_SELF_FAIL " + (e.message ?: "?"))
             }
             applyExclusions(b)
-            saveErr("MODE=DNS_ONLY_ALL_APPS")
-            getSharedPreferences("stats", MODE_PRIVATE).edit()
-                .putString("modeline", "MODE=DNS_ONLY_ALL_APPS").apply()
             var tries = 0
             while (tries < 5 && pfd == null && running) {
                 tries++
