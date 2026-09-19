@@ -310,8 +310,20 @@ class FilterService : VpnService() {
             // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
             // пока галочку не трогаешь, pref не существует и режим молча
             // оставался «все приложения». Теперь дефолт везде true.
-            val browsersOnly = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("browsers_only", true) } catch (_: Exception) { true }
-            if (browsersOnly) {
+            // ALL_APPS_DIAG (GPT): allowlist убран полностью. Захватываем ВСЕ
+            // приложения через маршруты ::/0 + 0.0.0.0/0; исключаем только
+            // себя, чтобы upstream-сокеты не зацикливались в TUN.
+            // Никаких пользовательских галочек — сборка ВСЕГДА в этом режиме.
+            getSharedPreferences("stats", MODE_PRIVATE).edit().putBoolean("browsers_only", false).apply()
+            val browsersOnly = false
+            saveErr("MODE=ALL_APPS_DIAG")
+            try {
+                b.addDisallowedApplication(packageName)
+                saveErr("DISALLOWED_SELF_OK " + packageName)
+            } catch (e: Exception) {
+                saveErr("DISALLOWED_SELF_FAIL " + e.javaClass.simpleName + ": " + (e.message ?: "?"))
+            }
+            if (false) {
                 var cnt = 0
                 for (pkg in listOf("com.android.chrome", "com.yandex.browser")) {
                     try {
