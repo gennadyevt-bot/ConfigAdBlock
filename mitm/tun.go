@@ -1537,17 +1537,10 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 	flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
 
-	// UDP/443 (QUIC/HTTP3): НЕ пропускаем напрямую — иначе рекламный
-	// трафик уходит по HTTP/3 МИМО MITM (тракт TLS+HTTP его не видит).
-	// Браузер откатывается на TCP/443 -> уже рабочий MITM-пайплайн.
+	// UDP/443 (QUIC/HTTP3) — ВРЕМЕННЫЙ ТЕСТ 0.5.75 (GPT): НЕ дропаем,
+	// пропускаем обычным protected UDP relay, как остальной UDP.
 	if id.LocalPort == 443 {
-		atomic.AddInt64(&quicDrops, 1)
-		if strings.Count(id.LocalAddress.String(), ":") > 1 {
-			atomic.AddInt64(&udp443v6N, 1)
-		} else {
-			atomic.AddInt64(&udp443v4N, 1)
-		}
-		return
+		flowLog("QUIC_PASS dst=" + id.LocalAddress.String())
 	}
 	// прочий UDP: прямой релей в апстрим (dst из заголовка потока)
 	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
