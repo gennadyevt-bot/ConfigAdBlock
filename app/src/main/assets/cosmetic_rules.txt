@@ -1,0 +1,7 @@
+! ConfigAdBlock cosmetic rules (AdGuard-style element hiding)
+! Ветка content-filter-engine. DNS-слой эти правила не использует —
+! они работают на уровне страницы.
+
+! --- dzen.ru: нативные рекламные карточки ---
+dzen.ru##[data-ad-type="direct"]
+dzen.ru##[data-ad-type="banner"]
