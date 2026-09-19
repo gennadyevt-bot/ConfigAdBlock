@@ -331,77 +331,26 @@ class FilterService : VpnService() {
             }.start()
             val hasV6 = linkV6 && probeV6
             saveErr("VPN_CONFIG_V6 link=" + linkV6 + " probe=" + probeV6 + "(cached) route=" + (if (hasV6) "ON" else "OFF"))
+                        // 0.5.77 DNS_ONLY_ALL_APPS (GPT): ПОЛНЫЙ ОТКАЗ от full-tunnel.
+            // Через TUN идёт ТОЛЬКО DNS (маршрут ровно на 10.0.0.2/32).
+            // Весь обычный TCP/UDP/QUIC идёт напрямую через сеть Android.
+            // Никаких addAllowedApplication; себя исключаем от петли.
             val b = Builder()
-                .setSession("Config AdBlock HTTPS")
+                .setSession("Config AdBlock DNS")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
-                .addRoute("0.0.0.0", 0)
-            if (hasV6) {
-                b.addAddress("fd00:1:2:3::1", 128)
-                b.addRoute("::", 0)
+                .addDnsServer("10.0.0.2")
+                .addRoute("10.0.0.2", 32)
+            try {
+                b.addDisallowedApplication(packageName)
+                saveErr("DISALLOWED_SELF_OK " + packageName)
+            } catch (e: Exception) {
+                saveErr("DISALLOWED_SELF_FAIL " + (e.message ?: "?"))
             }
-                // addDnsServer сознательно НЕ в цепочке: в режиме «только
-                // браузеры» VPN-DNS отравил бы резолвер ВСЕХ приложений
-                // (не-allowed физически не достигают 10.0.0.2). Ставим его
-                // только в ветке «все приложения» ниже.
-            // режим «только браузеры»: VPN захватывает лишь Chrome/Яндекс —
-            // остальные приложения гарантированно работают вне туннеля
-            // БАГ-ФИКС (GPT): дефолт в сервисе был false, а в чекбоксе true —
-            // пока галочку не трогаешь, pref не существует и режим молча
-            // оставался «все приложения». Теперь дефолт везде true.
-            // 0.5.66 (GPT): контрольная сборка снова BROWSER_ONLY —
-            // отделяем проблему глобального захвата от DNS. Пробник v6 и
-            // запрет самому себе остаются в любом режиме.
-            // 0.5.74 TEST (GPT): режим ВСЕ ПРИЛОЖЕНИЯ — allowlist убран,
-            // захват всех приложений и любых браузеров/WebView; себя
-            // исключаем через addDisallowedApplication ниже, пользовательские
-            // исключения applyExclusions сохранены
-            val browsersOnly = false
-            saveErr("MODE=ALL")
-            // 0.5.68 (GPT): в BROWSER_ONLY НЕ вызываем addDisallowedApplication
-            // вообще — чистый allowlist. Смешение allowed+disallowed на части
-            // прошивок даёт непредсказуемый захват. Disallow-self остаётся
-            // только в ветке ALL (ниже).
-            if (browsersOnly) {
-                var cnt = 0
-                for (pkg in listOf("com.android.chrome", "com.yandex.browser")) {
-                    try {
-                        b.addAllowedApplication(pkg)
-                        val uid = try { packageManager.getApplicationInfo(pkg, 0).uid } catch (_: Exception) { -1 }
-                        saveErr("allowed OK: " + pkg + " uid=" + uid)
-                        cnt++
-                    } catch (e: Exception) {
-                        // ПРИЧИНА обязана быть видна — иначе диагностика слепая
-                        saveErr("allowed FAIL: " + pkg + " " + e.javaClass.simpleName + ": " + (e.message ?: "?"))
-                    }
-                }
-                if (cnt == 0) {
-                    // по требованию GPT: молчаливый фолбэк на VPN всех
-                    // приложений ЗАПРЕЩЁН — лучше не поднимать туннель
-                    saveErr("allowed пуст — establish ОТМЕНЁН (безопасность)")
-                    return
-                }
-                saveErr("режим: ТОЛЬКО БРАУЗЕРЫ ($cnt)")
-                saveErr("disallowed calls=0")
-                val noMitmDbg0 = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
-                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
-                    "MODE=BROWSER_ONLY+" + (if (noMitmDbg0) "DIRECT" else "MITM")).apply()
-            } else {
-                // КЛЮЧЕВОЕ РЕШЕНИЕ: addDnsServer НЕ ставим вообще. Chrome
-                // падал с DNS_PROBE_FINISHED_BAD_CONFIG, т.к. VPN-DNS
-                // доставался ему лишь частично (1 запрос из сессии).
-                // Системный DNS оператора работает исправно, а блокировка
-                // рекламы идёт на уровне расшифрованных HTTP-запросов —
-                // перехват DNS для MITM-режима не нужен.
-                saveErr("VPN-DNS: выкл (системный DNS оператора)")
-                // само-исключение ТОЛЬКО здесь, в ветке «все приложения»
-                try { b.addDisallowedApplication(packageName) } catch (_: Exception) {}
-                applyExclusions(b)
-                val noMitmDbg1 = try { getSharedPreferences("stats", MODE_PRIVATE).getBoolean("no_mitm", false) } catch (_: Exception) { false }
-                getSharedPreferences("stats", MODE_PRIVATE).edit().putString("modeline",
-                    "MODE=ALL+" + (if (noMitmDbg1) "DIRECT" else "MITM")).apply()
-                saveErr("режим: все приложения, исключений: " + (getSharedPreferences("stats", MODE_PRIVATE).getStringSet("excluded_apps", emptySet()) ?: emptySet()).size)
-            }
+            applyExclusions(b)
+            saveErr("MODE=DNS_ONLY_ALL_APPS")
+            getSharedPreferences("stats", MODE_PRIVATE).edit()
+                .putString("modeline", "MODE=DNS_ONLY_ALL_APPS").apply()
             var tries = 0
             while (tries < 5 && pfd == null && running) {
                 tries++
