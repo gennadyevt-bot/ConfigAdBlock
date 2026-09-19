@@ -4,31 +4,45 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Белый запрещающий круг: центр 54,54; d=700/1024 -> r=36.91; stroke 54/1024 -> 5.69 -->
+    <!-- Белый запрещающий круг -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
         android:strokeWidth="5.69"
         android:pathData="M54,17.09 A36.91,36.91 0,1 1,53.99 17.09"/>
 
-    <!-- Буква A (контур с открытой серединой) -->
+    <!-- A: жирные ножки с плоской вершиной, round join (Arial Black стиль) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M33.75,70.98 L44.61,38.81 H51.68 L62.96,70.98 H54.42 L53.05,63.58 H41.85 L40.39,70.98 Z"/>
-
-    <!-- Буква D (внешний контур + дыра, evenOdd) -->
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M37,71 L45.5,39 H48 L58,71"/>
     <path
-        android:fillColor="#FFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M58.96,38.81 H69.82
-                          C79.21,38.81 83.95,43.66 83.95,53.99
-                          C83.95,64.33 79.21,70.98 69.82,70.98
-                          H58.96 Z
-                          M66.12,46.62 V64.55 H69.82
-                          C74.46,64.55 77.10,61.75 77.10,53.99
-                          C77.10,46.62 74.46,46.62 69.82,46.62 Z"/>
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:pathData="M42.5,60 H53"/>
 
-    <!-- Диагональная запрещающая линия: (295,755)-(755,295) of 1024 -->
+    <!-- D: стойка + круглая чаша штрихом, round join -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M65,39 V71"/>
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M65,39 C75,39 79.5,45 79.5,55 C79.5,65 75,71 65,71"/>
+
+    <!-- Диагональная запрещающая линия -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
