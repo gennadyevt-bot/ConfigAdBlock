@@ -295,7 +295,7 @@ class FilterService : VpnService() {
             // мёртвый аплинк) и браузер не откатывается на IPv4 -> белые
             // страницы. Роутеры часто раздают глобальный v6 адрес при
             // дохлом провайдерском транзите — поэтому не «адрес есть», а пробник.
-            val cmV6 = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val cmV6 = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
             val lpV6 = cmV6.getLinkProperties(cmV6.activeNetwork)
             val linkV6 = lpV6?.linkAddresses?.any {
                 it.address is java.net.Inet6Address && !it.address.isLinkLocalAddress && !it.address.isLoopbackAddress
