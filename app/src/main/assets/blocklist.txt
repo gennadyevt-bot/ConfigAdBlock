@@ -49738,3 +49738,9 @@ ssp01.rambler.ru
 cs.ad-tech.ru
 api.toponadss.com
 tracking-drru.ads.honor.com
+mc.yandex.ru
+mc.yandex.com
+rum.dzen.ru
+531111.ms.dzen.ru
+541111.ms.dzen.ru
+sentry-saas.rambler-co.ru
