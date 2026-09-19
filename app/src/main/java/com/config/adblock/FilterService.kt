@@ -285,6 +285,8 @@ class FilterService : VpnService() {
             val sessN = sp0.getLong("sess_n", 0) + 1
             sp0.edit().putLong("sess_n", sessN)
                 .putLong("sess_at", System.currentTimeMillis()).apply()
+            // 0.5.73: список SNI очищается при каждом запуске VPN
+            try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
             // Итоговая конфигурация VPN ДО establish (GPT: разбираем
             // обход TUN браузером — нужно видеть, что реально в билдере)
             val boCfg = try { sp0.getBoolean("browsers_only", true) } catch (_: Exception) { true }
@@ -494,6 +496,7 @@ class FilterService : VpnService() {
                         .putString("flowlog", mitm.Mitm.flowLog())
                         .putString("stackstats", mitm.Mitm.stackStats())
                         .putString("tunstats", mitm.Mitm.tunStats())
+                        .putString("snilog", mitm.Mitm.sniLog())
                         .putLong("gp_ok", mitm.Mitm.gpOkExt())
                         .putLong("gp_fail", mitm.Mitm.gpFailExt())
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
