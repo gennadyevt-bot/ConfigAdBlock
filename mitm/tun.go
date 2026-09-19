@@ -974,6 +974,26 @@ func handle443(conn adapter.TCPConn, hp string) {
 		closeReason = tag
 		relay(conn, up)
 	}
+	// SAFE MODE: HTTPS не расшифровываем и не подменяем сертификаты.
+	// Если ClientHello разобран и SNI попал в блок-лист, соединение
+	// закрываем до обращения к рекламному серверу. Всё остальное,
+	// включая пустой/неполный/неизвестный ClientHello, пропускаем
+	// напрямую. Так браузеру всегда показывается настоящий сертификат.
+	if perr == nil && peekSNI != "" && isBlocked(peekSNI) {
+		atomic.AddInt64(&blockedN, 1)
+		flowLog(fmt.Sprintf("#%d SAFE_BLOCK_SNI sni=%q dst=%s", fid, peekSNI, hp))
+		closeReason = "safeBlockSNI"
+		return
+	}
+	if perr != nil {
+		flowLog(fmt.Sprintf("#%d SAFE_DIRECT_UNKNOWN dst=%s peek=%v", fid, hp, perr))
+		goDirect("SAFE_DIRECT_UNKNOWN")
+		return
+	}
+	flowLog(fmt.Sprintf("#%d SAFE_DIRECT sni=%q dst=%s", fid, peekSNI, hp))
+	goDirect("SAFE_DIRECT")
+	return
+
 	// 1) h2-only клиент: MITM не умеет HTTP/2 -> сразу direct
 	if perr == nil && len(alpn) > 0 && !h1ok {
 		atomic.AddInt64(&h2BypassN, 1)
