@@ -1460,7 +1460,22 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		}
 		ans, err := resolveDNS(buf[:n])
 		if err != nil {
-			setErr(err)
+			// FAIL-SAFE (GPT 0.5.66): собственный резолвер весь упал
+			// (DoT/DoH/UDP). Не оставляем браузер без DNS — пересылаем
+			// ОРИГИНАЛЬНЫЙ запрос напрямую его получателю (DNS оператора
+			// всегда reachable) и возвращаем ответ как есть.
+			flowLog("dns failsafe raw relay dst=" + id.LocalAddress.String())
+			up, derr := dialUDP(net.JoinHostPort(id.LocalAddress.String(), "53"))
+			if derr == nil {
+				if _, werr := up.Write(buf[:n]); werr == nil {
+					_ = up.SetReadDeadline(time.Now().Add(4 * time.Second))
+					rbuf := make([]byte, 1500)
+					if rn, rerr := up.Read(rbuf); rerr == nil {
+						_, _ = conn.Write(rbuf[:rn])
+					}
+				}
+				_ = up.Close()
+			}
 			return
 		}
 		dnsCachePut(key, ans)
