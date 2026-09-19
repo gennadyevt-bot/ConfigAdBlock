@@ -340,6 +340,10 @@ func adSuspicion(host, path string) string {
 		return "google-ads"
 	case strings.Contains(h, "lentainform"):
 		return "lenta-adserver"
+	case strings.Contains(h, "inverga"):
+		return "inverga-ad"
+	case strings.Contains(p, "click"):
+		return "click-path"
 	case strings.HasPrefix(p, "/clck/"):
 		return "yandex-click-tracker"
 	case strings.HasPrefix(p, "/ads/") || strings.HasPrefix(p, "/showclicks/"):

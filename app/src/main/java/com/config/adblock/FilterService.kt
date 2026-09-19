@@ -463,6 +463,7 @@ class FilterService : VpnService() {
                     .putLong("last_quic_drops", mitm.Mitm.quicDrops())
                     .putLong("last_at", System.currentTimeMillis())
                     .putString("last_flowlog", mitm.Mitm.flowLog())
+                    .putString("last_log", getSharedPreferences("stats", MODE_PRIVATE).getString("log", "") ?: "")
                     .apply()
             } catch (_: Exception) {}
             running = false

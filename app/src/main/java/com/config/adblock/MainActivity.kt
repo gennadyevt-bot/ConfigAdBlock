@@ -271,7 +271,15 @@ class MainActivity : AppCompatActivity() {
             consentNeeded -> "РАЗРЕШИТЬ VPN"
             else -> "ВКЛЮЧИТЬ"
         }
-        val logText = prefs.getString("log", "") ?: ""
+        // Журнал: пока сервис жив — текущий поток FlowLog; после STOP —
+        // сохранённый снапшот последней сессии (GPT: лог не должен
+        // исчезать раньше анализа).
+        val svcRunning = FilterService.isRunning
+        var logText = prefs.getString("log", "") ?: ""
+        if (!svcRunning) {
+            val lastLog = prefs.getString("last_log", "") ?: ""
+            if (lastLog.isNotEmpty()) logText = lastLog
+        }
         val sst = prefs.getString("stackstats", "") ?: ""
         val mst = prefs.getString("mitmstats", "") ?: ""
         val cai = prefs.getString("cainfo", "") ?: ""
