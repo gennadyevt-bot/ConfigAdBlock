@@ -287,6 +287,8 @@ class FilterService : VpnService() {
                 .putLong("sess_at", System.currentTimeMillis()).apply()
             // 0.5.73: список SNI очищается при каждом запуске VPN
             try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
+            // 0.5.79: список DNS_ALLOW тоже очищается при старте VPN
+            try { mitm.Mitm.resetDNSAllowLog() } catch (_: Exception) {}
             // 0.5.75: аварийный автостоп убран — пользователь выключает сам
             // Итоговая конфигурация VPN ДО establish (GPT: разбираем
             // обход TUN браузером — нужно видеть, что реально в билдере)
@@ -447,6 +449,7 @@ class FilterService : VpnService() {
                         .putString("stackstats", mitm.Mitm.stackStats())
                         .putString("tunstats", mitm.Mitm.tunStats())
                         .putString("snilog", mitm.Mitm.sniLog())
+                        .putString("dnsallow", mitm.Mitm.dnsAllowLog())
                         .putLong("gp_ok", mitm.Mitm.gpOkExt())
                         .putLong("gp_fail", mitm.Mitm.gpFailExt())
                         .putLong("gp_dial", mitm.Mitm.gpDialExt())
