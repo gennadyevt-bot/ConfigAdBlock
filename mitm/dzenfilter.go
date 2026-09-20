@@ -236,51 +236,6 @@ new MutationObserver(function(ms){
 	}
 	return style + "\n" + script + "\n" + html
 }
-function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
-function rmLabel(root){
-  if(!root.querySelectorAll)return;
-  var all=(root.matches&&root.matches('*'))?[root]:[];
-  root.querySelectorAll('*').forEach(function(e){all.push(e);});
-  for(var k=0;k<all.length;k++){
-    var e=all[k];
-    if(!/^\s*Реклама\s*$/i.test(e.textContent||''))continue;
-    var n=e;
-    for(var up=0;up<8&&n&&n.parentElement;up++){
-      n=n.parentElement;
-      var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
-      var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
-      var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
-      if(cls||triple){n.remove();break;}
-    }
-  }
-}
-function emptyAdWrap(root){
-  if(!root.querySelectorAll)return;
-  root.querySelectorAll('div').forEach(function(d){
-    var s=((d.className&&d.className.toString)?d.className.toString():'')+' '+(d.id||'');
-    if(!/advert|banner|adbox|rtb|zenad|loader|skeleton/i.test(s))return;
-    if((d.textContent||'').trim()!=='')return;
-    if(d.querySelector('img,video,article,[role="article"]'))return;
-    d.remove();
-  });
-}
-function scan(root){try{rmSel(root);rmLabel(root);emptyAdWrap(root);}catch(_){}}
-scan(document);
-[0,250,750,1500,3000].forEach(function(t){setTimeout(function(){scan(document);},t);});
-new MutationObserver(function(ms){
-  ms.forEach(function(m){
-    if(!m.addedNodes)return;
-    m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);});
-  });
-}).observe(document.documentElement,{childList:true,subtree:true});
-})();</script>`
-	low := strings.ToLower(html)
-	idx := strings.Index(low, "</head>")
-	if idx > 0 {
-		return html[:idx] + style + "\n" + script + "\n" + html[idx:]
-	}
-	return style + "\n" + script + "\n" + html
-}
 
 // handleDzenMITM — mini-MITM ТОЛЬКО для dzen.ru.
 // handleDzenMITM - собственный selective content-MITM для dzen (2.0.7/209).
