@@ -638,10 +638,10 @@ class FilterService : VpnService() {
             cfg.writeText("tunnel:\n  name: tun0\n  mtu: 1500\n  ipv4: 10.0.0.2\n" +
                 "socks5:\n  address: 127.0.0.1\n  port: 1080\n  udp: 'udp'\n" +
                 "misc:\n  log-level: warn\n  log-file: " + File(filesDir, "hev.log").absolutePath + "\n")
-            val ok = hev.htproxy.TProxyService.TProxyStartService(cfg.absolutePath, pfd.fd)
+            val ok = hev.htproxy.TProxyService.start(cfg.absolutePath, pfd.fd)
             saveErr("HEV TProxyStartService=" + ok)
 
-            while (running && hev.htproxy.TProxyService.TProxyIsRunning()) {
+            while (running && hev.htproxy.TProxyService.isRunning()) {
                 try { Thread.sleep(1000) } catch (_: Exception) { break }
                 sp.edit().putString("stackstats", mitm.Mitm.socksStats()).apply()
             }
@@ -649,7 +649,7 @@ class FilterService : VpnService() {
             saveErr("HEV КРАХ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
         } finally {
             saveErr("HEV стоп")
-            try { hev.htproxy.TProxyService.TProxyStopService() } catch (_: Exception) {}
+            try { hev.htproxy.TProxyService.stop() } catch (_: Exception) {}
             try { mitm.Mitm.stopSocks5() } catch (_: Exception) {}
             running = false
             isRunning = false
