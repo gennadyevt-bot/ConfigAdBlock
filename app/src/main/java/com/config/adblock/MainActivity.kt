@@ -26,6 +26,7 @@ import java.net.NetworkInterface
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
+    private var cbAvailLogged = false
 
     private lateinit var prefs: android.content.SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
@@ -329,6 +330,43 @@ class MainActivity : AppCompatActivity() {
         if (dnsAllow.isNotEmpty()) {
             logText = logText + "\n--- DNS_ALLOW (последние, сверху новые) ---\n" + dnsAllow
         }
+        // 222: Yandex Content Blocker - статус и кнопка настройки
+        val ybInstalled = try { packageManager.getPackageInfo("com.yandex.browser", 0); true } catch (_: Exception) { false }
+        val cbServed = prefs.getInt("cb_served", 0)
+        val cbRulesReady = (prefs.getString("log", "") ?: "").contains("YANDEX_CB_RULES_READY")
+        try {
+            val tvCb = findViewById<android.widget.TextView>(R.id.tvYandexCb)
+            val btnCb = findViewById<com.google.android.material.button.MaterialButton>(R.id.btnYandexCb)
+            if (ybInstalled) {
+                tvCb.text = "Яндекс.Браузер: найден. Откройте настройки браузера и включите ConfigAdBlock" +
+                    (if (cbServed > 0) " (запросов правил: " + cbServed + ")" else if (cbRulesReady) " (правила готовы)" else "")
+                btnCb.visibility = android.view.View.VISIBLE
+                btnCb.setOnClickListener {
+                    val i = Intent("com.yandex.browser.contentBlocker.ACTION_SETTING")
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try {
+                        startActivity(i)
+                        logClick("YANDEX_CB_OPEN_SETTINGS")
+                    } catch (_: Exception) {
+                        val i2 = Intent("com.samsung.android.sbrowser.contentBlocker.ACTION_SETTING")
+                        i2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            startActivity(i2)
+                            logClick("YANDEX_CB_OPEN_SETTINGS samsung-fallback")
+                        } catch (_: Exception) {
+                            logClick("YANDEX_CB_OPEN_SETTINGS FAIL")
+                        }
+                    }
+                }
+                if (!cbAvailLogged) {
+                    logClick("YANDEX_CB_AVAILABLE")
+                    cbAvailLogged = true
+                }
+            } else {
+                tvCb.text = "Яндекс.Браузер: не установлен (Content Blocker недоступен)"
+                btnCb.visibility = android.view.View.GONE
+            }
+        } catch (_: Exception) {}
         val sst = prefs.getString("stackstats", "") ?: ""
         val mst = prefs.getString("mitmstats", "") ?: ""
         val tst = prefs.getString("tunstats", "") ?: ""

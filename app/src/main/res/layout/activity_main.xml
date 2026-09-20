@@ -128,5 +128,20 @@
         android:textSize="13sp"
         android:layout_marginTop="24dp"
         android:gravity="center" />
+    <TextView
+        android:id="@+id/tvYandexCb"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Яндекс.Браузер: проверка..."
+        android:textColor="@color/white_bg"
+        android:textSize="13sp"
+        android:layout_marginTop="16dp"
+        android:gravity="center" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnYandexCb"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="ВКЛЮЧИТЬ БЛОКИРОВКУ В ЯНДЕКС.БРАУЗЕРЕ" />
 </LinearLayout>
 </ScrollView>

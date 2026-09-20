@@ -1,12 +1,35 @@
 [Adblock Plus 2.0]
-! ConfigAdBlock content blocker filters (Samsung Internet / Yandex Browser)
-! Доставляется через Content Blocker API - без MITM, без fake-IP.
+! ConfigAdBlock content blocker filters (Yandex Browser / Samsung Internet)
+! Доставляется через Content Blocker API - без MITM, без VPN, без CA.
 
-! --- dzen.ru: нативные рекламные карточки (первый тест) ---
+! --- dzen.ru: нативные рекламные карточки ---
 dzen.ru##[data-ad-type="direct"]
 dzen.ru##[data-ad-type="banner"]
+dzen.ru##[data-ad-type="rtb"]
+dzen.ru##.card-rtb
+dzen.ru##[class*="adBox"]
+dzen.ru##[class*="MyTargetAdvert"]
+dzen.ru##[class*="advertItem"]
+dzen.ru##[data-testid="bottom-ad"]
+www.dzen.ru##[data-ad-type="direct"]
+www.dzen.ru##[data-ad-type="banner"]
+www.dzen.ru##[data-ad-type="rtb"]
+www.dzen.ru##.card-rtb
+www.dzen.ru##[class*="adBox"]
+www.dzen.ru##[class*="MyTargetAdvert"]
+www.dzen.ru##[class*="advertItem"]
+www.dzen.ru##[data-testid="bottom-ad"]
+m.dzen.ru##[data-ad-type="direct"]
+m.dzen.ru##[data-ad-type="banner"]
+m.dzen.ru##[data-ad-type="rtb"]
+m.dzen.ru##.card-rtb
+m.dzen.ru##[class*="adBox"]
+m.dzen.ru##[class*="MyTargetAdvert"]
+m.dzen.ru##[class*="advertItem"]
+m.dzen.ru##[data-testid="bottom-ad"]
 
-! --- базовые сетевые правила (чтобы фильтр был заметен сразу) ---
+! --- сетевые правила ---
 ||doubleclick.net^
 ||googlesyndication.com^
 ||ads.adfox.ru^
+||an.yandex.ru^
