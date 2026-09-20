@@ -12,6 +12,7 @@ package mitm
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -20,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 const dzenFakeIP = "10.0.0.3"
@@ -161,29 +161,44 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		return false, false
 	}
 	flowLog("DZEN_MITM_BEGIN host=" + sni)
+	// Resolve the leaf before consuming/writing TLS or taking ownership.
+	leaf, err := certForName(sni)
+	if err != nil {
+		flowLog("DZEN_CA_FAIL host=" + sni + " err=" + err.Error())
+		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
+		return false, false
+	}
+	flowLog("DZEN_CA_READY host=" + sni)
+	handled = true
 	defer func() {
 		if r := recover(); r != nil {
 			flowLog(fmt.Sprintf("DZEN_MITM_FAIL panic:%v", r))
 		}
+		// Once TLS bytes were sent, direct relay is only safe on reconnect.
+		if !ok {
+			cacheBypass(sni)
+		}
 		_ = conn.Close()
 	}()
 	cfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"http/1.1"},
-		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return certForName(hi.ServerName)
-		},
+		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
+		Certificates: []tls.Certificate{*leaf},
 	}
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
 		// клиент не принял сертификат/обрыв -> bypass + следующий раз direct
 		cacheBypass(sni)
-		flowLog("DZEN_TLS_REJECT " + err.Error())
+		event := "DZEN_TLS_FAIL"
+		if strings.Contains(err.Error(), "remote error: tls:") {
+			event = "DZEN_TLS_REJECT"
+		}
+		flowLog(event + " host=" + sni + " err=" + err.Error())
 		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
 		return true, false
 	}
-	_ = tlsConn.SetDeadline(time.Time{})
+	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	flowLog("DZEN_TLS_OK sni=" + sni)
 
 	req, err := http.ReadRequest(bufio.NewReader(tlsConn))
@@ -191,9 +206,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		flowLog("DZEN_MITM_FAIL read-request:" + err.Error())
 		return true, false
 	}
-	upstreamHost := req.Host
-	if upstreamHost == "" {
-		upstreamHost = sni
+	defer req.Body.Close()
+	// Route only the selective host authenticated by the client SNI.
+	upstreamHost := sni
+	if req.Host != "" && !strings.EqualFold(req.Host, sni) && !strings.EqualFold(req.Host, net.JoinHostPort(sni, "443")) {
+		flowLog("DZEN_MITM_FAIL host-mismatch")
+		return true, false
 	}
 	ip, err := resolveRealIP(upstreamHost)
 	if err != nil {
@@ -205,54 +223,39 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		flowLog("DZEN_MITM_FAIL updial:" + err.Error())
 		return true, false
 	}
+	defer up.Close()
 	upTLS := tls.Client(up, &tls.Config{ServerName: upstreamHost, MinVersion: tls.VersionTLS12})
 	_ = upTLS.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := upTLS.Handshake(); err != nil {
-		_ = up.Close()
 		flowLog("DZEN_MITM_FAIL uptls:" + err.Error())
 		return true, false
 	}
-	_ = upTLS.SetDeadline(time.Time{})
+	_ = upTLS.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	outReq := new(http.Request)
 	*outReq = *req
 	outReq.URL.Scheme = "https"
 	outReq.URL.Host = upstreamHost
 	outReq.RequestURI = ""
+	outReq.Close = true
 	outReq.Header = req.Header.Clone()
 	outReq.Header.Del("Proxy-Connection")
 	outReq.Header.Del("Accept-Encoding") // иначе br/gzip-тело не проинжектить
 	if err := outReq.Write(upTLS); err != nil {
-		_ = up.Close()
 		flowLog("DZEN_MITM_FAIL reqwrite:" + err.Error())
 		return true, false
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upTLS), outReq)
 	if err != nil {
-		_ = up.Close()
 		flowLog("DZEN_MITM_FAIL upread:" + err.Error())
 		return true, false
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
-	_ = up.Close()
-	if err != nil {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if err := filterDzenResponse(resp); err != nil {
 		flowLog("DZEN_MITM_FAIL body:" + err.Error())
 		return true, false
-	}
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(ct, "text/html") {
-		body = []byte(dzenInjectCSS(string(body)))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		resp.Header.Del("Transfer-Encoding")
-		resp.TransferEncoding = nil
-		resp.ContentLength = int64(len(body))
-		flowLog("DZEN_HTML_FILTERED bytes=" + strconv.Itoa(len(body)))
-	} else {
-		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		resp.Header.Del("Transfer-Encoding")
-		resp.TransferEncoding = nil
-		resp.ContentLength = int64(len(body))
 	}
 	if err := resp.Write(tlsConn); err != nil {
 		flowLog("DZEN_MITM_FAIL respwrite:" + err.Error())
@@ -260,4 +263,35 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	}
 	flowLog("DZEN_MITM_DONE host=" + sni + " ct=" + ct)
 	return true, true
+}
+
+// Keep the body reader consistent with any rewritten content and length.
+func filterDzenResponse(resp *http.Response) error {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	resp.Close = true
+	if strings.Contains(ct, "text/html") && (resp.Header.Get("Content-Encoding") == "" || resp.Header.Get("Content-Encoding") == "identity") {
+		const limit = 16 * 1024 * 1024
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			return err
+		}
+		if len(body) <= limit {
+			body = []byte(dzenInjectCSS(string(body)))
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			resp.Header.Del("Transfer-Encoding")
+			resp.Header.Del("Content-Security-Policy")
+			resp.Header.Del("Content-Security-Policy-Report-Only")
+			resp.Header.Del("ETag")
+			resp.TransferEncoding = nil
+			flowLog("DZEN_HTML_FILTERED bytes=" + strconv.Itoa(len(body)))
+		} else {
+			// Preserve large responses instead of silently truncating them.
+			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), resp.Body))
+			flowLog("DZEN_HTML_SKIP oversized")
+		}
+	}
+
+	return nil
 }

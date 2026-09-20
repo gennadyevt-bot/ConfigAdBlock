@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,9 +9,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -23,16 +26,24 @@ import (
 // новое HTTPS-соединение, и RSA-2048 (~50-100 мс на подпись) под полным
 // туннелем уводил CPU в пик и замораживал интерфейс. ECDSA подписывает
 // за доли миллисекунды.
+var caFileMu sync.Mutex
+var caInitMu sync.Mutex
+
 func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
+	caFileMu.Lock()
+	defer caFileMu.Unlock()
 	certPath := filepath.Join(dir, "ca.crt")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	if certPEM, err := os.ReadFile(certPath); err == nil {
-		if keyPEM, err := os.ReadFile(keyPath); err == nil {
-			if cert, err := tls.X509KeyPair(certPEM, keyPEM); err == nil {
-				return cert, certPEM, nil
-			}
-		}
+	certPEM, certErr := os.ReadFile(certPath)
+	keyPEM, keyErr := os.ReadFile(keyPath)
+	if certErr == nil && keyErr == nil {
+		cert, err := tls.X509KeyPair(certPEM, keyPEM)
+		return cert, certPEM, err
+	}
+	// Never silently replace a CA already installed by the user.
+	if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
+		return tls.Certificate{}, nil, fmt.Errorf("cannot load existing CA: cert=%v key=%v", certErr, keyErr)
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -53,12 +64,12 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
 		return tls.Certificate{}, nil, err
 	}
@@ -67,4 +78,42 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	}
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	return cert, certPEM, err
+}
+
+// InitMitmCA prepares the existing signing CA without starting any proxy.
+func InitMitmCA(filesDir string) (err error) {
+	caInitMu.Lock()
+	defer caInitMu.Unlock()
+	defer func() {
+		if err != nil {
+			flowLog("HEV_CA_INIT_FAIL " + err.Error())
+		} else {
+			flowLog("HEV_CA_INIT_OK")
+		}
+	}()
+	cert, _, err := loadOrCreateCA(filesDir)
+	if err != nil {
+		return err
+	}
+	if len(cert.Certificate) == 0 {
+		return fmt.Errorf("CA certificate is empty")
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return err
+	}
+	if !parsed.IsCA || parsed.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return fmt.Errorf("certificate cannot sign CA leaves")
+	}
+	if now := time.Now(); now.Before(parsed.NotBefore) || now.After(parsed.NotAfter) {
+		return fmt.Errorf("CA is outside its validity period")
+	}
+	mitmCAMu.Lock()
+	same := mitmCACert != nil && mitmCAX509 != nil && bytes.Equal(mitmCAX509.Raw, parsed.Raw)
+	mitmCAMu.Unlock()
+	if !same {
+		setMITMCA(cert, parsed)
+	}
+	_, err = certForName("dzen.ru")
+	return err
 }

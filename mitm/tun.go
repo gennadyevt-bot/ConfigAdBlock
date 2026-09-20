@@ -1,28 +1,28 @@
 package mitm
 
 import (
-	"math/big"
-	"encoding/pem"
-	"crypto/x509/pkix"
-	"crypto/x509"
-	"crypto/rand"
-	"crypto/elliptic"
-	"crypto/ecdsa"
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"os"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -544,16 +544,19 @@ func MitmStats() string {
 // для IP-литералов кладём IP в SAN.
 // caInfoStr / leafVerifyStr — вывод на экран для сверки отпечатков (GPT).
 var (
-	caInfoStr   string
+	caDiagMu      sync.Mutex
+	caInfoStr     string
 	leafVerifyStr string
 )
 
-func CaInfo() string   { return caInfoStr }
-func LeafVerify() string { return leafVerifyStr }
+func CaInfo() string     { caDiagMu.Lock(); defer caDiagMu.Unlock(); return caInfoStr }
+func LeafVerify() string { caDiagMu.Lock(); defer caDiagMu.Unlock(); return leafVerifyStr }
 
 // verifyLeafSelfTest: генерируем тестовый leaf и проверяем цепочку
 // до нашего CA так, как это делал бы клиент (issuer, SAN, срок, подпись).
 func verifyLeafSelfTest() {
+	caDiagMu.Lock()
+	defer caDiagMu.Unlock()
 	mitmCAMu.Lock()
 	caX := mitmCAX509
 	mitmCAMu.Unlock()
@@ -586,14 +589,16 @@ func verifyLeafSelfTest() {
 }
 
 var (
-	mitmCAMu   sync.Mutex
-	mitmCACert *tls.Certificate
-	mitmCAX509 *x509.Certificate
-	certCacheMu sync.Mutex
-	certCache   = map[string]*tls.Certificate{}
+	caGenerationMu sync.RWMutex
+	mitmCAMu       sync.Mutex
+	mitmCACert     *tls.Certificate
+	mitmCAX509     *x509.Certificate
+	certCacheMu    sync.Mutex
+	certCache      = map[string]*tls.Certificate{}
 )
 
 func setMITMCA(cert tls.Certificate, x509cert *x509.Certificate) {
+	caGenerationMu.Lock()
 	mitmCAMu.Lock()
 	mitmCACert = &cert
 	mitmCAX509 = x509cert
@@ -601,16 +606,21 @@ func setMITMCA(cert tls.Certificate, x509cert *x509.Certificate) {
 	certCacheMu.Lock()
 	certCache = map[string]*tls.Certificate{}
 	certCacheMu.Unlock()
+	caGenerationMu.Unlock()
 	// инфо на экран: subject + sha256 + срок — для сверки с установленным
 	// в системе сертификатом (исключаем рассинхрон CA №1 vs CA №2)
 	fp := sha256.Sum256(x509cert.Raw)
+	caDiagMu.Lock()
 	caInfoStr = "CA: " + x509cert.Subject.CommonName +
 		" sha256:" + fmt.Sprintf("%X", fp)[:16] +
 		" до:" + x509cert.NotAfter.Format("2006-01-02")
+	caDiagMu.Unlock()
 	verifyLeafSelfTest()
 }
 
 func certForName(name string) (*tls.Certificate, error) {
+	caGenerationMu.RLock()
+	defer caGenerationMu.RUnlock()
 	certCacheMu.Lock()
 	if c, ok := certCache[name]; ok {
 		certCacheMu.Unlock()
@@ -767,10 +777,10 @@ var h2BypassN int64
 
 // FAIL-OPEN счётчики (GPT): h2_bypass, cert_bypass, failopen, direct ok/fail
 var (
-	directOkN    int64
-	directFailN  int64
-	certBypassN  int64
-	failopenN    int64
+	directOkN   int64
+	directFailN int64
+	certBypassN int64
+	failopenN   int64
 )
 
 // Bypass-кэш: живёт одну VPN-сессию (процесс). SNI (или dst при пустом
@@ -1564,7 +1574,7 @@ func resolveDNS(query []byte) ([]byte, error) {
 			lastErr = fmt.Errorf("dial %s: %w", up, err)
 			continue
 		}
-		_ = rconn.SetDeadline(time.Now().Add(4*time.Second))
+		_ = rconn.SetDeadline(time.Now().Add(4 * time.Second))
 		if _, err := rconn.Write(query); err != nil {
 			rconn.Close()
 			lastErr = fmt.Errorf("write %s: %w", up, err)
@@ -1607,8 +1617,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			flowLog("DNS_BLOCK " + dom)
 			resp := make([]byte, 12)
 			copy(resp, buf[:2])
-			resp[2] = 0x81 // QR|RD
-			resp[3] = 0x83 // RA + RCODE=3 (NXDOMAIN)
+			resp[2] = 0x81                    // QR|RD
+			resp[3] = 0x83                    // RA + RCODE=3 (NXDOMAIN)
 			resp = append(resp, buf[12:n]...) // question как есть
 			_, _ = conn.Write(resp)
 			return
