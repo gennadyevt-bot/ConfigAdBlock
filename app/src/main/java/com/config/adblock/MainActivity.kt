@@ -14,6 +14,8 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.TextView
 import android.widget.Toast
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
