@@ -133,7 +133,7 @@ func socksHandleConn(c net.Conn) {
 				return
 			}
 			// 217: любые dzen-related host'ы, идущие мимо MITM - в лог
-			if perr == nil && strings.Contains(sni, "dzen") && !isDzenHost(sni) {
+			if sni != "" && strings.Contains(sni, "dzen") && !isDzenHost(sni) {
 				flowLog("DZEN_RELATED_HOST host=" + target + " sni=" + sni)
 			}
 			// 2.0.7 (209): selective content-MITM на СОБСТВЕННОМ коде

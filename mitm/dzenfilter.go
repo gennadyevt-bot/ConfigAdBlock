@@ -270,6 +270,9 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		flowLog("DZEN_MITM_FAIL upread:" + err.Error())
 		return true, false
 	}
+	flowLog(fmt.Sprintf("DZEN_RESPONSE host=%s method=%s path=%s status=%s ct=%s len=%d",
+		upstreamHost, req.Method, req.URL.Path, resp.Status,
+		strings.ToLower(resp.Header.Get("Content-Type")), resp.ContentLength))
 	defer resp.Body.Close()
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if err := filterDzenResponse(resp, req.URL.Path); err != nil {
@@ -288,13 +291,6 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 func filterDzenResponse(resp *http.Response, reqPath string) error {
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	resp.Close = true
-	// 217: полная карта ответов без содержимого
-	defer func() {
-		if resp != nil {
-			flowLog(fmt.Sprintf("DZEN_RESPONSE host=%s method=%s path=%s status=%s ct=%s len=%d",
-				upstreamHost, req.Method, req.URL.Path, resp.Status, ct, resp.ContentLength))
-		}
-	}()
 	// 216: для Дзена снимаем CSP - иначе inline <script> косметики заблокирован
 	resp.Header.Del("Content-Security-Policy")
 	resp.Header.Del("Content-Security-Policy-Report-Only")
