@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -116,4 +117,14 @@ func InitMitmCA(filesDir string) (err error) {
 	}
 	_, err = certForName("dzen.ru")
 	return err
+}
+
+// ActiveCAFingerprint identifies the signer actually loaded in this process.
+func ActiveCAFingerprint() string {
+	mitmCAMu.Lock()
+	defer mitmCAMu.Unlock()
+	if mitmCAX509 == nil {
+		return ""
+	}
+	return fmt.Sprintf("%X", sha256.Sum256(mitmCAX509.Raw))
 }

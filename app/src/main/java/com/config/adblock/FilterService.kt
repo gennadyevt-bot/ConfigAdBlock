@@ -597,6 +597,7 @@ class FilterService : VpnService() {
                 mitm.Mitm.clearBypassCache()
                 mitm.Mitm.initMitmCA(filesDir.absolutePath)
                 saveErr("HEV_CA_INIT_OK")
+                sp.edit().putString("ca_diagnostics", CaDiagnostics.inspect(this@FilterService)).apply()
             } catch (e: Exception) {
                 saveErr("HEV_CA_INIT_FAIL " + (e.message ?: e.javaClass.simpleName))
             }

@@ -84,7 +84,8 @@ class MainActivity : AppCompatActivity() {
     private fun installCert() {
         try {
             val pem = mitm.Mitm.caCertPem(filesDir.absolutePath)
-            val name = "ConfigAdBlock-CA.crt"
+            val fp = CaDiagnostics.fingerprint(CaDiagnostics.certificate(pem))
+            val name = "ConfigAdBlock-CA-" + fp.take(16) + ".crt"
             if (Build.VERSION.SDK_INT >= 29) {
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, name)
@@ -93,12 +94,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri == null) { Toast.makeText(this, "Не удалось сохранить сертификат", Toast.LENGTH_LONG).show(); return }
-                contentResolver.openOutputStream(uri)?.use { it.write(pem) }
+                try {
+                    val stream = contentResolver.openOutputStream(uri) ?: error("Не удалось открыть файл сертификата")
+                    stream.use { it.write(pem) }
+                } catch (e: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw e
+                }
             } else {
                 val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 dir.mkdirs()
                 File(dir, name).writeBytes(pem)
             }
+            prefs.edit().putString("ca_export_name", name).apply()
             Toast.makeText(this, "Сертификат сохранён в Загрузки. Дальше: Настройки -> Безопасность -> Установить сертификат -> CA-сертификат -> выбрать " + name, Toast.LENGTH_LONG).show()
             try { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } catch (_: Exception) {}
         } catch (e: Exception) {
@@ -140,6 +148,10 @@ class MainActivity : AppCompatActivity() {
     // Старый сертификат в системе после этого станет мусором — удали его
     // в настройках (Настройки → Безопасность → Учётные данные пользователя).
     private fun resetCa() {
+        if (FilterService.isRunning) {
+            Toast.makeText(this, "Сначала выключите фильтр. Сброс меняет CA и требует новой установки.", Toast.LENGTH_LONG).show()
+            return
+        }
         try {
             filesDir.listFiles()?.forEach { f ->
                 if (f.name == "ca.crt" || f.name == "ca.key") f.delete()
@@ -239,6 +251,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        thread {
+            val result = CaDiagnostics.inspect(this@MainActivity)
+            prefs.edit().putString("ca_diagnostics", result).apply()
+        }
         updateUi()
         handler.post(ticker)
     }
@@ -336,6 +352,8 @@ class MainActivity : AppCompatActivity() {
             val flowTail = flowLines.subList(java.lang.Math.max(0, flowLines.size - 14), flowLines.size).joinToString("\n")
             err.text = (if (running) "Фильтр DNS/SNI включён" else "Фильтр остановлен") +
                 "\n" + sst +
+                "\n" + prefs.getString("ca_diagnostics", "CA: проверка…") +
+                (prefs.getString("ca_export_name", null)?.let { "\nФайл для установки: " + it } ?: "") +
                 (if (flowTail.isNotEmpty())
                     "\n--- DZEN flowlog (последние) ---\n" + flowTail
                 else
