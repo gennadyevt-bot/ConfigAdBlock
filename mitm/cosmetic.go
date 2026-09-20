@@ -21,9 +21,17 @@ var cosmeticInject = []byte(`<style>
 [class*="promo-block"],[class*="Promo"],[id*="promo"],
 [class*="rnet"],[class*="r-ads"],[class*="r-banner"],[id*="r-banner"],
 [aria-label*="реклам"],[class*="ad-slot"],[id*="ad-slot"],[class*="adunit"],[id*="adunit"],
-[class*="commercial"],[id*="commercial"],[class*="sponsor"],[id*="sponsor"]
+[class*="commercial"],[id*="commercial"],[class*="sponsor"],[id*="sponsor"],
+	// Дзен 2.0.3: нативные рекламные карточки
+	[data-ad-type="direct"],
+	[data-ad-type="banner"],
+	div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]),
+	div[id^="ad-"][class*="__isStretched"],
+	div[class*="MyTargetAdvert"],
+	div[data-testid="bottom-ad"],
+	div[class*="__advertItem "]
 {display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}
-</style><script>(function(){function k(){document.querySelectorAll('[id*="adfox"],[class*="adfox"],[class*="yandex_direct"],[class*="yandex-direct"],[class*="adsbygoogle"],[class*="banner"],[id*="banner"],[class*="-ads"],[class*=" ad-"],[data-marker="advert"],[class*="promo-block"],[class*="commercial"],[class*="rnet"],[class*="r-ads"],[aria-label*="реклам"]').forEach(function(e){e.style.display="none";e.style.height="0";e.style.overflow="hidden"})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>`)
+</style><script>(function(){function k(){document.querySelectorAll('[id*="adfox"],[class*="adfox"],[class*="yandex_direct"],[class*="yandex-direct"],[class*="adsbygoogle"],[class*="banner"],[id*="banner"],[class*="-ads"],[class*=" ad-"],[data-marker="advert"],[class*="promo-block"],[class*="commercial"],[class*="rnet"],[class*="r-ads"],[aria-label*="реклам"],[data-ad-type="direct"],[data-ad-type="banner"],div[id^="ad-"][class*="__isStretched"],div[class*="MyTargetAdvert"],div[data-testid="bottom-ad"],div[class*="__advertItem "]').forEach(function(e){e.style.display="none";e.style.height="0";e.style.overflow="hidden"})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>`)
 
 // filterHTML: text/html -> вставляем косметику после <head>.
 // Сжатие (gzip) прозрачно распаковывается и упаковывается обратно.
@@ -42,6 +50,12 @@ func filterHTML(resp *http.Response) *http.Response {
 	raw, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil || len(raw) < 256 {
+		resp.Body = io.NopCloser(bytes.NewReader(raw))
+		return resp
+	}
+	// 2.0.3: Content-Encoding непустой и не gzip (br/deflate) -
+	// НЕ модифицируем body, отдаём как есть
+	if enc != "" && enc != "gzip" {
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
 		return resp
 	}

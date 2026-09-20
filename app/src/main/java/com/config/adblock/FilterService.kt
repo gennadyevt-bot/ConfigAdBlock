@@ -452,7 +452,7 @@ class FilterService : VpnService() {
                         .putString("eng_err", mitm.Mitm.lastErr())
                         .putString("selftest", mitm.Mitm.selfTestResult())
                         .putString("flowlog", mitm.Mitm.flowLog())
-                        .putString("stackstats", mitm.Mitm.stackStats())
+                        .putString("stackstats", mitm.Mitm.stackStats() + " " + mitm.Mitm.contentStats())
                         .putString("tunstats", mitm.Mitm.tunStats())
                         .putString("snilog", mitm.Mitm.sniLog())
                         .putString("dnsallow", mitm.Mitm.dnsAllowLog())
@@ -593,6 +593,14 @@ class FilterService : VpnService() {
             val blFile = File(filesDir, "transport-blocklist.txt")
             assets.open("blocklist.txt").use { input -> blFile.outputStream().use { input.copyTo(it) } }
             mitm.Mitm.configureTransportFilter(blFile.absolutePath)
+            // 2.0.3: локальный goproxy для selective content (dzen).
+            // Ошибка proxy НЕ роняет VPN - DNS/SNI продолжают работать.
+            try {
+                mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                saveErr("CONTENT_PROXY_OK " + mitm.Mitm.proxyCurAddr())
+            } catch (e: Exception) {
+                saveErr("CONTENT_PROXY_FAIL " + (e.message ?: "?"))
+            }
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
                     override fun protect(fd: Long): Boolean {
@@ -666,6 +674,7 @@ class FilterService : VpnService() {
             saveErr("HEV стоп")
             try { hev.htproxy.TProxyService.stop() } catch (_: Exception) {}
             try { mitm.Mitm.stopSocks5() } catch (_: Exception) {}
+            try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
             running = false
             isRunning = false
             try { tun?.close() } catch (_: Exception) {}

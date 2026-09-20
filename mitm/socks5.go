@@ -6,6 +6,7 @@ package mitm
 // достукиваемся до реального назначения.
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,17 @@ var (
 	localSocksTCPN int64
 	localSocksUDPN int64
 )
+
+var (
+	contentMitmN    int64
+	contentMitmErrN int64
+)
+
+// ContentStats - статистика selective content-слоя (dzen).
+func ContentStats() string {
+	return "CONTENT_MITM=" + strconv.FormatInt(atomic.LoadInt64(&contentMitmN), 10) +
+		" CONTENT_MITM_ERR=" + strconv.FormatInt(atomic.LoadInt64(&contentMitmErrN), 10)
+}
 
 // SocksStats — строка для экрана статистики.
 func SocksStats() string {
@@ -118,6 +130,16 @@ func socksHandleConn(c net.Conn) {
 			if hit, _ := checkURL(sni, ""); sni != "" && hit {
 				atomic.AddInt64(&transportBlocked, 1)
 				return
+			}
+			// SELECTIVE content (2.0.3): ТОЛЬКО dzen -> локальный goproxy.
+			// Fail-open: ошибка proxy ДО replay ClientHello -> raw ниже
+			// уходит в уже поднятый direct-up.
+			if isDzenHost(sni) {
+				if socksDispatchDzen(c, sni, raw) {
+					atomic.AddInt64(&contentMitmN, 1)
+					return
+				}
+				atomic.AddInt64(&contentMitmErrN, 1)
 			}
 			if len(raw) > 0 {
 				if _, err := up.Write(raw); err != nil {
@@ -347,4 +369,44 @@ func socksParseAddrBytes(b []byte, off int) (string, int, int, bool) {
 	port := int(b[off])<<8 | int(b[off+1])
 	off += 2
 	return host, port, off, true
+}
+
+
+// socksDispatchDzen - SELECTIVE content 2.0.3: поток dzen уводим в
+// локальный goproxy (CONNECT + replay перехваченного ClientHello).
+func socksDispatchDzen(c net.Conn, sni string, raw []byte) bool {
+	flowLog("CONTENT_MITM host=" + sni)
+	pconn, err := dialTCP(proxyCurAddr())
+	if err != nil {
+		flowLog("CONTENT_MITM_FAIL dial-proxy " + err.Error())
+		return false
+	}
+	_ = pconn.SetDeadline(time.Now().Add(15 * time.Second))
+	if _, err := fmt.Fprintf(pconn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", sni, sni); err != nil {
+		_ = pconn.Close()
+		flowLog("CONTENT_MITM_FAIL connect-write")
+		return false
+	}
+	br := bufio.NewReader(pconn)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, " 200") {
+		_ = pconn.Close()
+		flowLog("CONTENT_MITM_FAIL status=" + strings.TrimSpace(status))
+		return false
+	}
+	for {
+		line, lerr := br.ReadString('\n')
+		if lerr != nil || line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	_ = pconn.SetDeadline(time.Time{})
+	if _, err := pconn.Write(raw); err != nil {
+		_ = pconn.Close()
+		flowLog("CONTENT_MITM_FAIL hello-replay")
+		return false
+	}
+	socksRelay(c, pconn)
+	flowLog("CONTENT_MITM_DONE host=" + sni)
+	return true
 }

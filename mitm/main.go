@@ -238,6 +238,11 @@ func StartProxy(filesDir string, blocklistPath string) error {
 	})).HandleConnect(dohHandler{action: dohAccept})
 
 	g.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		// 2.0.3: Дзен - только identity-ответы, иначе Brotli проходит
+		// сквозь filterHTML и ломает страницу
+		if isDzenHost(req.URL.Hostname()) {
+			req.Header.Set("Accept-Encoding", "identity")
+		}
 		if isBlocked(req.Host) {
 			// Пустой 403: баннер/скрипт не загрузится, страница не сломается
 			return req, goproxy.NewResponse(req, "text/html", http.StatusForbidden, "")
