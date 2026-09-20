@@ -1,316 +1,301 @@
 package mitm
 
+// Локальный SOCKS5 (transport-core-v2, этап 1): ЧИСТЫЙ direct-outbound
+// поверх protected-сокетов. НИКАКОЙ блокировки, MITM, фильтрации.
+// HEV (hev-socks5-tunnel) гонит весь TUN-трафик сюда, мы просто
+// достукиваемся до реального назначения.
+
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
-	"strings"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// SOCKS5-шим между tun2socks и MITM-прокси. tun2socks полноценно
-// поддерживает только SOCKS5. TCP 443 -> цепочка в goproxy (MITM+фильтры),
-// остальные порты — напрямую (plain HTTP через MITM ломался бы). UDP 53
-// (DNS) ретранслируем в 8.8.8.8 — приложение исключено из VPN.
-const socks5Addr = "127.0.0.1:1080"
-
 var (
-	socksMu  sync.Mutex
-	socksSrv *socks5Server
-
-	tcpCount  int64
-	udpCount  int64
-	directCnt int64
-	tcpTry    int64
-	udpTry    int64
-	dnsGot    int64
-
-	errMu      sync.Mutex
-	lastErrStr string
+	socksLn   net.Listener
+	socksMu   sync.Mutex
+	socksTCPN int64
+	socksUDPN int64
 )
 
-// setErr запоминает последнюю ошибку движка (видна на экране приложения).
-func setErr(e error) {
-	if e == nil {
-		return
-	}
-	errMu.Lock()
-	lastErrStr = e.Error()
-	errMu.Unlock()
+// SocksStats — строка для экрана статистики.
+func SocksStats() string {
+	return "socks5 tcp=" + strconv.FormatInt(atomic.LoadInt64(&socksTCPN), 10) +
+		" udp=" + strconv.FormatInt(atomic.LoadInt64(&socksUDPN), 10)
 }
 
-// LastErr возвращает последнюю ошибку движка (пусто, если всё чисто).
-func LastErr() string {
-	errMu.Lock()
-	defer errMu.Unlock()
-	return lastErrStr
-}
-
-// Счётчики для самотеста на главном экране приложения.
-func TcpCount() int64  { return atomic.LoadInt64(&tcpCount) }
-func UdpCount() int64  { return atomic.LoadInt64(&udpCount) }
-func DirectCount() int64 { return atomic.LoadInt64(&directCnt) }
-func TcpTry() int64     { return atomic.LoadInt64(&tcpTry) }
-func UdpTry() int64     { return atomic.LoadInt64(&udpTry) }
-func DnsGot() int64    { return atomic.LoadInt64(&dnsGot) }
-func GpOkExt() int64   { return atomic.LoadInt64(&gpOk) }
-func GpFailExt() int64 { return atomic.LoadInt64(&gpFail) }
-func GpDialExt() int64 { return atomic.LoadInt64(&gpDial) }
-
-type socks5Server struct {
-	ln  net.Listener
-	udp *net.UDPConn
-}
-
-func startSocks5() error {
+// StartSocks5 поднимает локальный SOCKS5 (CONNECT + UDP ASSOCIATE).
+func StartSocks5(addr string) error {
 	socksMu.Lock()
 	defer socksMu.Unlock()
-	if socksSrv != nil {
-		return errors.New("socks5 already running")
+	if socksLn != nil {
+		return nil
 	}
-	ln, err := net.Listen("tcp", socks5Addr)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	uc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
-	if err != nil {
-		_ = ln.Close()
-		return err
-	}
-	s := &socks5Server{ln: ln, udp: uc}
-	socksSrv = s
-	go s.tcpLoop()
-	go s.udpLoop()
-	log.Printf("[MITM] socks5 on %s, udp relay %s", socks5Addr, uc.LocalAddr())
+	socksLn = ln
+	go socksAcceptLoop(ln)
 	return nil
 }
 
-func stopSocks5() {
+// StopSocks5 останавливает сервер.
+func StopSocks5() {
 	socksMu.Lock()
 	defer socksMu.Unlock()
-	if socksSrv != nil {
-		_ = socksSrv.ln.Close()
-		_ = socksSrv.udp.Close()
-		socksSrv = nil
+	if socksLn != nil {
+		_ = socksLn.Close()
+		socksLn = nil
 	}
 }
 
-func (s *socks5Server) tcpLoop() {
+func socksAcceptLoop(ln net.Listener) {
 	for {
-		c, err := s.ln.Accept()
+		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go s.handleTCP(c)
+		go socksHandleConn(c)
 	}
 }
 
-// Счётчики DIRECT-релея (матрица GPT: dialOK+TX>0+RX=0 => ответ не
-// возвращается; TX=0 => клиент ничего не отправил после коннекта).
-var (
-	dirTx int64
-	dirRx int64
-)
-
-func DirTx() int64 { return atomic.LoadInt64(&dirTx) }
-func DirRx() int64 { return atomic.LoadInt64(&dirRx) }
-
-func relay(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { n, _ := io.Copy(a, b); if n > 0 { atomic.AddInt64(&dirTx, n) }; wg.Done() }()
-	go func() { n, _ := io.Copy(b, a); if n > 0 { atomic.AddInt64(&dirRx, n) }; wg.Done() }()
-	wg.Wait()
-	_ = a.Close()
-	_ = b.Close()
-}
-
-func (s *socks5Server) handleTCP(c net.Conn) {
+func socksHandleConn(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
-
-	hdr := make([]byte, 2)
-	if _, err := io.ReadFull(c, hdr); err != nil || hdr[0] != 5 {
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(c, head); err != nil || head[0] != 5 {
 		return
 	}
-	methods := make([]byte, int(hdr[1]))
+	methods := make([]byte, int(head[1]))
 	if _, err := io.ReadFull(c, methods); err != nil {
 		return
 	}
-	if _, err := c.Write([]byte{5, 0}); err != nil { // NO AUTH
+	if _, err := c.Write([]byte{5, 0}); err != nil {
 		return
 	}
-
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(c, req); err != nil || req[0] != 5 {
 		return
 	}
-	cmd := req[1]
+	host, port, err := socksReadAddr(c, req[3])
+	if err != nil {
+		return
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(port))
+	switch req[1] {
+	case 1: // CONNECT
+		up, err := dialTCP(target)
+		if err != nil {
+			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer up.Close()
+		if _, err := c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+			return
+		}
+		atomic.AddInt64(&socksTCPN, 1)
+		_ = c.SetDeadline(time.Time{})
+		socksRelay(c, up)
+	case 3: // UDP ASSOCIATE
+		uconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+		if err != nil {
+			_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer uconn.Close()
+		uport := uconn.LocalAddr().(*net.UDPAddr).Port
+		resp := []byte{5, 0, 0, 1, 127, 0, 0, 1, byte(uport >> 8), byte(uport)}
+		if _, err := c.Write(resp); err != nil {
+			return
+		}
+		atomic.AddInt64(&socksUDPN, 1)
+		_ = c.SetDeadline(time.Time{})
+		socksHandleUDP(c, uconn)
+	default:
+		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+	}
+}
+
+func socksReadAddr(c io.Reader, atyp byte) (string, int, error) {
 	var host string
-	switch req[3] {
+	var port int
+	switch atyp {
 	case 1:
 		b := make([]byte, 4)
 		if _, err := io.ReadFull(c, b); err != nil {
-			return
+			return "", 0, err
+		}
+		host = net.IP(b).String()
+	case 4:
+		b := make([]byte, 16)
+		if _, err := io.ReadFull(c, b); err != nil {
+			return "", 0, err
 		}
 		host = net.IP(b).String()
 	case 3:
 		lb := make([]byte, 1)
 		if _, err := io.ReadFull(c, lb); err != nil {
-			return
+			return "", 0, err
 		}
-		db := make([]byte, int(lb[0]))
-		if _, err := io.ReadFull(c, db); err != nil {
-			return
+		b := make([]byte, int(lb[0]))
+		if _, err := io.ReadFull(c, b); err != nil {
+			return "", 0, err
 		}
-		host = string(db)
+		host = string(b)
 	default:
-		return
+		return "", 0, fmt.Errorf("bad atyp %d", atyp)
 	}
 	pb := make([]byte, 2)
 	if _, err := io.ReadFull(c, pb); err != nil {
-		return
+		return "", 0, err
 	}
-	port := int(pb[0])<<8 | int(pb[1])
-
-	if cmd != 1 && cmd != 3 {
-		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
-	}
-
-	if cmd == 3 { // UDP ASSOCIATE
-		uport := s.udp.LocalAddr().(*net.UDPAddr).Port
-		_, _ = c.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, byte(uport >> 8), byte(uport)})
-		_ = c.SetDeadline(time.Time{})
-		_, _ = io.Copy(io.Discard, c)
-		return
-	}
-
-	// CONNECT. Только 443 идёт через MITM (там TLS и фильтры); остальное —
-	// прямое соединение, иначе plain HTTP ломался бы попыткой TLS.
-	if port != 443 {
-		up, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprint(port)), 10*time.Second)
-		if err != nil {
-			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
-			return
-		}
-		_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-		atomic.AddInt64(&directCnt, 1)
-		_ = c.SetDeadline(time.Time{})
-		relay(c, up)
-		return
-	}
-
-	g, err := dialTCP(proxyCurAddr())
-	if err != nil {
-		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
-	}
-	_, _ = fmt.Fprintf(g, "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port, host, port)
-	br := bufio.NewReader(g)
-	status, err := br.ReadString('\n')
-	if err != nil || !strings.Contains(status, "200") {
-		_ = g.Close()
-		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
-	}
-	for {
-		line, err := br.ReadString('\n')
-		if err != nil {
-			_ = g.Close()
-			return
-		}
-		if line == "\r\n" {
-			break
-		}
-	}
-	_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-	atomic.AddInt64(&tcpCount, 1)
-	_ = c.SetDeadline(time.Time{})
-	if br.Buffered() > 0 {
-		_, _ = io.CopyN(c, br, int64(br.Buffered()))
-	}
-	relay(c, g)
+	port = int(pb[0])<<8 | int(pb[1])
+	return host, port, nil
 }
 
-func (s *socks5Server) udpLoop() {
+func socksRelay(a, b net.Conn) {
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(a, b)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(b, a)
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func socksHandleUDP(ctrl net.Conn, u *net.UDPConn) {
+	upstreams := make(map[string]net.Conn)
+	var sender *net.UDPAddr
+	defer func() {
+		for _, up := range upstreams {
+			_ = up.Close()
+		}
+	}()
+	go func() {
+		one := make([]byte, 1)
+		_, _ = ctrl.Read(one)
+		_ = u.Close()
+		for _, up := range upstreams {
+			_ = up.Close()
+		}
+	}()
 	buf := make([]byte, 64*1024)
 	for {
-		n, client, err := s.udp.ReadFromUDP(buf)
+		_ = u.SetReadDeadline(time.Now().Add(120 * time.Second))
+		n, addr, err := u.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
-		go s.handleUDP(pkt, client)
+		if sender == nil {
+			sender = addr
+		}
+		payload, host, port, ok := socksParseUDPDatagram(buf[:n])
+		if !ok {
+			continue
+		}
+		key := net.JoinHostPort(host, strconv.Itoa(port))
+		up, exists := upstreams[key]
+		if !exists {
+			conn, err := dialUDP(key)
+			if err != nil {
+				continue
+			}
+			upstreams[key] = conn
+			go socksPumpUDPDown(u, sender, conn, host, port)
+		}
+		_, _ = up.Write(payload)
 	}
 }
 
-func (s *socks5Server) handleUDP(pkt []byte, client *net.UDPAddr) {
-	if len(pkt) < 10 || pkt[2] != 0 {
-		return
+func socksPumpUDPDown(client *net.UDPConn, sender *net.UDPAddr, up net.Conn, host string, port int) {
+	defer up.Close()
+	buf := make([]byte, 64*1024)
+	for {
+		_ = up.SetReadDeadline(time.Now().Add(120 * time.Second))
+		n, err := up.Read(buf)
+		if err != nil {
+			return
+		}
+		pkt := socksBuildUDPDatagram(host, port, buf[:n])
+		_, _ = client.WriteToUDP(pkt, sender)
 	}
-	var target string
-	off := 4
-	switch pkt[3] {
-	case 1:
-		ip := net.IP(pkt[4:8])
-		off = 8
-		port := int(pkt[off])<<8 | int(pkt[off+1])
-		off += 2
-		if ip.String() == "10.0.0.2" {
-			ip = net.ParseIP("8.8.8.8")
-		}
-		if port != 53 {
-			return
-		}
-		target = net.JoinHostPort(ip.String(), "53")
-	case 3:
-		if len(pkt) < 5 {
-			return
-		}
-		l := int(pkt[4])
-		if len(pkt) < 5+l+2 {
-			return
-		}
-		domain := string(pkt[5 : 5+l])
-		off = 5 + l
-		port := int(pkt[off])<<8 | int(pkt[off+1])
-		off += 2
-		if port != 53 {
-			return
-		}
-		target = net.JoinHostPort(domain, "53")
-	default:
-		return
-	}
-	payload := pkt[off:]
+}
 
-	rconn, err := net.DialTimeout("udp", target, 5*time.Second)
-	if err != nil {
-		return
+func socksParseUDPDatagram(b []byte) ([]byte, string, int, bool) {
+	if len(b) < 10 || b[2] != 0 {
+		return nil, "", 0, false
 	}
-	defer rconn.Close()
-	_ = rconn.SetDeadline(time.Now().Add(5*time.Second))
-	if _, err := rconn.Write(payload); err != nil {
-		return
+	host, port, hdrLen, ok := socksParseAddrBytes(b, 3)
+	if !ok {
+		return nil, "", 0, false
 	}
-	rbuf := make([]byte, 4096)
-	rn, err := rconn.Read(rbuf)
-	if err != nil {
-		return
+	return b[hdrLen:], host, port, true
+}
+
+func socksBuildUDPDatagram(host string, port int, payload []byte) []byte {
+	h := make([]byte, 0, 24)
+	h = append(h, 0, 0, 0)
+	ip := net.ParseIP(host)
+	if ip4 := ip.To4(); ip4 != nil {
+		h = append(h, 1)
+		h = append(h, ip4...)
+	} else if ip16 := ip.To16(); ip16 != nil {
+		h = append(h, 4)
+		h = append(h, ip16...)
+	} else {
+		h = append(h, 3, byte(len(host)))
+		h = append(h, host...)
 	}
-	atomic.AddInt64(&udpCount, 1)
-	raddr, _ := net.ResolveUDPAddr("udp", target)
-	out := make([]byte, 0, rn+10)
-	out = append(out, 0, 0, 0, 1)
-	out = append(out, raddr.IP.To4()...)
-	out = append(out, byte(raddr.Port>>8), byte(raddr.Port))
-	out = append(out, rbuf[:rn]...)
-	_, _ = s.udp.WriteToUDP(out, client)
+	h = append(h, byte(port>>8), byte(port))
+	return append(h, payload...)
+}
+
+func socksParseAddrBytes(b []byte, off int) (string, int, int, bool) {
+	if off >= len(b) {
+		return "", 0, 0, false
+	}
+	atyp := b[off]
+	off++
+	var host string
+	switch atyp {
+	case 1:
+		if off+4 > len(b) {
+			return "", 0, 0, false
+		}
+		host = net.IP(b[off : off+4]).String()
+		off += 4
+	case 4:
+		if off+16 > len(b) {
+			return "", 0, 0, false
+		}
+		host = net.IP(b[off : off+16]).String()
+		off += 16
+	case 3:
+		if off >= len(b) {
+			return "", 0, 0, false
+		}
+		l := int(b[off])
+		off++
+		if off+l > len(b) {
+			return "", 0, 0, false
+		}
+		host = string(b[off : off+l])
+		off += l
+	default:
+		return "", 0, 0, false
+	}
+	if off+2 > len(b) {
+		return "", 0, 0, false
+	}
+	port := int(b[off])<<8 | int(b[off+1])
+	off += 2
+	return host, port, off, true
 }

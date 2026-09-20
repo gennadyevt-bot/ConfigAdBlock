@@ -85,7 +85,7 @@ class FilterService : VpnService() {
         if (!isRunning) {
             running = true
             isRunning = true
-            thread { if (emptyMode) runEmptyVpn() else if (httpsMode) runHttpsFilter() else runFilter() }
+            thread { if (emptyMode) runEmptyVpn() else if (httpsMode) runHevTransport() else runFilter() }
         }
         return START_NOT_STICKY
     }
@@ -571,6 +571,86 @@ class FilterService : VpnService() {
             saveErr("КРАХ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
         } finally {
             saveErr("стоп")
+            running = false
+            isRunning = false
+            try { tun?.close() } catch (_: Exception) {}
+            try { stopForeground(true) } catch (_: Exception) {}
+        }
+    }
+
+
+    // ================= transport-core-v2 =================
+    // HEV (hev-socks5-tunnel) + локальный SOCKS5 direct-outbound.
+    // ЭТАП 1: чистый full-tunnel, НИКАКОЙ блокировки/фильтрации.
+    private fun runHevTransport() {
+        try {
+            saveErr("HEV: старт транспорта v2 (full-tunnel, без блокировки)")
+            val sp = getSharedPreferences("stats", MODE_PRIVATE)
+            try {
+                mitm.Mitm.setProtector(object : mitm.Mitm.Protector {
+                    override fun protect(fd: Long): Boolean {
+                        return try { this@FilterService.protect(fd.toInt()) } catch (_: Exception) { false }
+                    }
+                })
+            } catch (e: Exception) { saveErr("HEV protector FAIL " + e.message) }
+            try {
+                mitm.Mitm.startSocks5("127.0.0.1:1080")
+                saveErr("HEV socks5 127.0.0.1:1080 ok")
+            } catch (e: Exception) {
+                saveErr("HEV socks5 FAIL " + e.message)
+                return
+            }
+
+            val b = Builder()
+                .setSession("Config AdBlock HEV")
+                .setMtu(1500)
+                .addAddress("10.0.0.2", 32)
+                .addRoute("0.0.0.0", 0)
+            try {
+                b.addDisallowedApplication(packageName)
+                saveErr("HEV DISALLOWED_SELF_OK " + packageName)
+            } catch (e: Exception) {
+                saveErr("HEV DISALLOWED_SELF_FAIL " + (e.message ?: "?"))
+            }
+            applyExclusions(b)
+            saveErr("MODE=HEV_FULLTUNNEL")
+            sp.edit().putString("modeline", "MODE=HEV_FULLTUNNEL").apply()
+
+            var pfd: ParcelFileDescriptor? = null
+            var tries = 0
+            while (tries < 3 && pfd == null && running) {
+                tries++
+                pfd = try { b.establish() } catch (e: Exception) { saveErr("VPN слот: " + (e.message ?: "ошибка")); null }
+                if (pfd == null) {
+                    val pi = VpnService.prepare(this)
+                    if (pi != null) {
+                        pi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(pi)
+                    }
+                    try { Thread.sleep(2500) } catch (_: Exception) {}
+                }
+            }
+            if (pfd == null) { saveErr("HEV: слот VPN недоступен"); return }
+            tun = pfd
+            saveErr("HEV VPN_ESTABLISHED")
+
+            val cfg = File(filesDir, "hev-socks5-tunnel.yml")
+            cfg.writeText("tunnel:\n  name: tun0\n  mtu: 1500\n  ipv4: 10.0.0.2\n" +
+                "socks5:\n  address: 127.0.0.1\n  port: 1080\n  udp: 'udp'\n" +
+                "misc:\n  log-level: warn\n  log-file: " + File(filesDir, "hev.log").absolutePath + "\n")
+            val ok = hev.htproxy.TProxyService.TProxyStartService(cfg.absolutePath, pfd.fd)
+            saveErr("HEV TProxyStartService=" + ok)
+
+            while (running && hev.htproxy.TProxyService.TProxyIsRunning()) {
+                try { Thread.sleep(1000) } catch (_: Exception) { break }
+                sp.edit().putString("stackstats", mitm.Mitm.socksStats()).apply()
+            }
+        } catch (e: Exception) {
+            saveErr("HEV КРАХ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+        } finally {
+            saveErr("HEV стоп")
+            try { hev.htproxy.TProxyService.TProxyStopService() } catch (_: Exception) {}
+            try { mitm.Mitm.stopSocks5() } catch (_: Exception) {}
             running = false
             isRunning = false
             try { tun?.close() } catch (_: Exception) {}

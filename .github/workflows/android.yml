@@ -1,7 +1,7 @@
 name: Android CI
 on:
   push:
-    branches: [ main, content-filter-engine ]
+    branches: [ main, content-filter-engine, transport-core-v2 ]
   pull_request:
     branches: [ main ]
 jobs:
@@ -36,10 +36,14 @@ jobs:
     - uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: '9.7.1'
+    - name: Fetch hev-socks5-tunnel AAR
+      run: curl -sSfL -o /tmp/hev-socks5-tunnel.aar https://github.com/heiher/hev-socks5-tunnel/releases/download/2.17.1/hev-socks5-tunnel.aar
     - name: Put AAR into app and build APK
       run: |
         mkdir -p app/libs
         cp mitm/mitm.aar app/libs/mitm.aar
+        cp /tmp/hev-socks5-tunnel.aar app/libs/hev-socks5-tunnel.aar
+        ls -la app/libs
         gradle assembleRelease
     - uses: actions/upload-artifact@v4
       with:

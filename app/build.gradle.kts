@@ -6,8 +6,8 @@ android {
         applicationId = "com.config.adblock"
         minSdk = 26
         targetSdk = 35
-        versionCode = 104
-        versionName = "0.6.0-content"
+        versionCode = 200
+        versionName = "2.0.0-transport"
     }
     signingConfigs {
         create("release") {
@@ -30,6 +30,7 @@ android {
     }
 }
 dependencies {
+    implementation(files("libs/hev-socks5-tunnel.aar"))
     implementation(files("libs/mitm.aar"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
