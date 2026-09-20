@@ -12,6 +12,8 @@ package mitm
 
 import (
 	"bufio"
+	"compress/gzip"
+	"encoding/json"
 	"crypto/sha256"
 	"crypto/x509"
 	"bytes"
@@ -297,6 +299,61 @@ func filterDzenResponse(resp *http.Response) error {
 		}
 	}
 
+	// 2.0.13/215: JSON-фильтрация ленты Дзена (рекламные элементы
+	// удаляются из массивов целиком -> пустых контейнеров не остаётся).
+	// Fail-open: любая ошибка -> оригинальный body без изменений.
+	if strings.Contains(ct, "application/json") {
+		const limit = 16 * 1024 * 1024
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			return err
+		}
+		final := body
+		if len(body) > limit {
+			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), resp.Body))
+			flowLog("DZEN_JSON_SKIP oversized")
+			return nil
+		}
+		enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
+		switch enc {
+		case "", "identity":
+			filtered, removed, ferr := dzenFilterJSON(body)
+			if ferr != nil {
+				flowLog("DZEN_JSON_SKIP parse-fail")
+			} else if removed > 0 {
+				final = filtered
+				flowLog(fmt.Sprintf("DZEN_JSON_FILTERED removed=%d", removed))
+			}
+		case "gzip":
+			raw, e1 := dzenGunzip(body)
+			if e1 != nil {
+				flowLog("DZEN_JSON_SKIP gunzip:" + e1.Error())
+			} else {
+				filtered, removed, ferr := dzenFilterJSON(raw)
+				switch {
+				case ferr != nil:
+					flowLog("DZEN_JSON_SKIP parse-fail")
+				case removed == 0:
+				default:
+					if out, e2 := dzenGzip(filtered); e2 != nil {
+						flowLog("DZEN_JSON_SKIP regzip:" + e2.Error())
+					} else {
+						final = out
+						flowLog(fmt.Sprintf("DZEN_JSON_FILTERED removed=%d", removed))
+					}
+				}
+			}
+		default:
+			// br/deflate без поддержки - НЕ ломаем, отдаём как есть
+			flowLog("DZEN_FILTER_SKIP encoding=" + enc)
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(final))
+		resp.ContentLength = int64(len(final))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(final)))
+		resp.Header.Del("Transfer-Encoding")
+		resp.TransferEncoding = nil
+	}
+
 	return nil
 }
 
@@ -337,4 +394,150 @@ func dzenDiagChain(host string, cert *tls.Certificate) {
 	valid := now.After(leaf.NotBefore) && now.Before(leaf.NotAfter)
 	flowLog(fmt.Sprintf("LEAF_HOST=%s SAN_OK=%v ISSUER_MATCH=%v SIG_OK=%v SERVER_AUTH=%v VALID=%v IsCA=%v",
 		host, sanOK, issuerMatch, sigOK, serverAuth, valid, leaf.IsCA))
+}
+
+
+// --- 2.0.13/215: JSON-фильтрация Дзена -------------------------------------
+
+var dzenAdKeyHints = []string{"advert", "banner", "adfox", "nativead", "promo",
+	"commercial", "socialad", "yandexad", "zen_ad", "ad_type", "adtype", "isad", "advertisement"}
+
+func dzenGunzip(b []byte) ([]byte, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	return io.ReadAll(io.LimitReader(zr, 64*1024*1024))
+}
+
+func dzenGzip(b []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(b); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// dzenFilterJSON парсит JSON, логирует найденные рекламные маркеры и
+// удаляет рекламные элементы массивов. Возвращает nil,0,nil если нечего
+// удалять. Любая ошибка -> оригинальный body (fail-open снаружи).
+func dzenFilterJSON(body []byte) ([]byte, int, error) {
+	var v interface{}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		return nil, 0, err
+	}
+	removed, markers := dzenScrub(&v, "")
+	if len(markers) == 0 {
+		flowLog("DZEN_JSON_NO_AD_MARKERS")
+	} else {
+		seen := make(map[string]bool)
+		n := 0
+		for _, m := range markers {
+			if !seen[m] && n < 12 {
+				seen[m] = true
+				n++
+				flowLog("DZEN_JSON_AD_FOUND " + m)
+			}
+		}
+	}
+	if removed == 0 {
+		return nil, 0, nil
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, removed, nil
+}
+
+func dzenIsAdKey(kl string) bool {
+	for _, a := range dzenAdKeyHints {
+		if kl == a || strings.Contains(kl, a) {
+			return true
+		}
+	}
+	return false
+}
+
+func dzenIsAdElement(m map[string]interface{}) bool {
+	for k, v := range m {
+		kl := strings.ToLower(k)
+		switch kl {
+		case "isad", "is_ad":
+			if b, ok := v.(bool); ok && b {
+				return true
+			}
+		case "adtype", "ad_type", "type":
+			if s, ok := v.(string); ok && dzenAdTypeVal(s) {
+				return true
+			}
+		case "adfox", "nativead", "native_ad", "zen_ad", "advertising", "advertisement":
+			return true
+		}
+	}
+	return false
+}
+
+func dzenAdTypeVal(s string) bool {
+	s = strings.ToLower(s)
+	return s == "ad" || strings.Contains(s, "direct") || strings.Contains(s, "banner") ||
+		strings.Contains(s, "promo") || strings.Contains(s, "advert") || strings.Contains(s, "native")
+}
+
+func dzenElemID(m map[string]interface{}) string {
+	for _, k := range []string{"id", "feedId", "documentId", "rid", "blockId"} {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				if len(s) > 16 {
+					return s[:16]
+				}
+				return s
+			}
+		}
+	}
+	return "-"
+}
+
+// dzenScrub рекурсивно обходит JSON: рекламные ЭЛЕМЕНТЫ массивов удаляет
+// целиком (чтобы место схлопнулось), маркеры в ключах - только логирует.
+func dzenScrub(node *interface{}, path string) (int, []string) {
+	removed := 0
+	var markers []string
+	switch t := (*node).(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			kl := strings.ToLower(k)
+			if dzenIsAdKey(kl) {
+				markers = append(markers, fmt.Sprintf("key=%s path=%s type=%T", k, path+"."+k, val))
+			}
+			r, m := dzenScrub(&val, path+"."+k)
+			t[k] = val
+			removed += r
+			markers = append(markers, m...)
+		}
+	case []interface{}:
+		kept := t[:0]
+		for i, el := range t {
+			if m, ok := el.(map[string]interface{}); ok && dzenIsAdElement(m) {
+				removed++
+				flowLog(fmt.Sprintf("DZEN_JSON_AD_FOUND key=element path=%s[%d] type=feed-item id=%s",
+					path, i, dzenElemID(m)))
+				continue
+			}
+			var elv interface{} = el
+			r, m := dzenScrub(&elv, fmt.Sprintf("%s[%d]", path, i))
+			kept = append(kept, elv)
+			removed += r
+			markers = append(markers, m...)
+		}
+		*node = kept
+	}
+	return removed, markers
 }
