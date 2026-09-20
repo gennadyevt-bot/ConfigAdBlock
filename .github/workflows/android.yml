@@ -36,15 +36,21 @@ jobs:
     - uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: '9.7.1'
-    - name: Fetch hev-socks5-tunnel JNI libs
+    - name: Build official hev-socks5-tunnel JNI libs (tag 2.17.1)
       run: |
         set -e
-        base=https://github.com/heiher/hev-socks5-tunnel/releases/download/2.17.1
-        for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-          mkdir -p app/src/main/jniLibs/$abi
-          curl -sSfL -o app/src/main/jniLibs/$abi/libhev-socks5-tunnel.so $base/hev-socks5-tunnel-android-$abi
+        git clone --depth 1 --branch 2.17.1 --recurse-submodules https://github.com/heiher/hev-socks5-tunnel.git /tmp/hev
+        cd /tmp/hev
+        ln -sf . jni
+        wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+        unzip -q android-ndk-r27d-linux.zip
+        ./android-ndk-r27d/ndk-build clean
+        ./android-ndk-r27d/ndk-build APP_MODULES=hev-socks5-tunnel -j$(nproc)
+        for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+          mkdir -p $GITHUB_WORKSPACE/app/src/main/jniLibs/$abi
+          cp libs/$abi/libhev-socks5-tunnel.so $GITHUB_WORKSPACE/app/src/main/jniLibs/$abi/
         done
-        ls -la app/src/main/jniLibs/*/
+        ls -la $GITHUB_WORKSPACE/app/src/main/jniLibs/*/
     - name: Put AAR into app and build APK
       run: |
         mkdir -p app/libs
