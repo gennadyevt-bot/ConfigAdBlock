@@ -337,12 +337,9 @@ class FilterService : VpnService() {
             // Через TUN идёт ТОЛЬКО DNS (маршрут ровно на 10.0.0.2/32).
             // Весь обычный TCP/UDP/QUIC идёт напрямую через сеть Android.
             // Никаких addAllowedApplication; себя исключаем от петли.
-            // 0.6.0-content4: два режима одной кнопкой.
-            //  content_filter=true  -> SELECTIVE_CONTENT: полный v4-маршрут,
-            //     mini-MITM ТОЛЬКО для доменов белого списка (по SNI, dzen
-            //     первый), всё остальное SAFE_DIRECT. Без fake-IP.
-            //  content_filter=false -> стабильный DNS_ONLY как в 0.5.81.
-            val contentFilter = sp0.getBoolean("content_filter", true)
+            // 0.6.0-content5: ВРЕМЕННО чистый DNS_ONLY — без full-tunnel,
+            // без ::/0, без MITM. Контент-слой выключен, код сохранён.
+            val contentFilter = false
             try { mitm.Mitm.setContentFilter(contentFilter) } catch (_: Exception) {}
             val b = Builder()
                 .setSession("Config AdBlock")
@@ -350,16 +347,7 @@ class FilterService : VpnService() {
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer("10.0.0.1")
                 .addRoute("10.0.0.1", 32)
-            if (contentFilter) {
-                b.addRoute("0.0.0.0", 0)
-                if (hasV6) {
-                    b.addAddress("fd00:1:2:3::1", 128)
-                    b.addRoute("::", 0)
-                }
-                saveErr("MODE=SELECTIVE_CONTENT v6route=" + (if (hasV6) "ON" else "OFF"))
-            } else {
-                saveErr("MODE=DNS_ONLY_ALL_APPS")
-            }
+            saveErr("MODE=DNS_ONLY_ALL_APPS")
             getSharedPreferences("stats", MODE_PRIVATE).edit()
                 .putString("modeline", (if (contentFilter) "MODE=SELECTIVE_CONTENT" else "MODE=DNS_ONLY_ALL_APPS")).apply()
             try {
