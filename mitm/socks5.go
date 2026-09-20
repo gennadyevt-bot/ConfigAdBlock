@@ -132,16 +132,11 @@ func socksHandleConn(c net.Conn) {
 				atomic.AddInt64(&transportBlocked, 1)
 				return
 			}
-			// 2.0.5: selective content-MITM снова ВКЛЮЧЁН для Дзена
-			// (причина поломки 2.0.3 была в protect() на loopback-сокете ->
-			// теперь dialLocal). Fail-open: ошибка proxy ДО replay ->
-			// direct ниже.
+			// 2.0.6: selective content-MITM снова ВЫКЛЮЧЕН (207 ломала сеть).
+			// Код dispatch сохранён, вызов отключён - dzen идёт обычным
+			// direct relay после SNI-проверки.
 			if isDzenHost(sni) {
-				if socksDispatchDzen(c, sni, raw) {
-					atomic.AddInt64(&contentMitmN, 1)
-					return
-				}
-				atomic.AddInt64(&contentMitmErrN, 1)
+				flowLog("DZEN_CONTENT_MITM=OFF_DIRECT sni=" + sni)
 			}
 			if len(raw) > 0 {
 				if _, err := up.Write(raw); err != nil {
