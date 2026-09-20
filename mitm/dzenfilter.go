@@ -355,7 +355,7 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
 		switch enc {
 		case "", "identity":
-			filtered, removed, ferr := dzenFilterJSON(body)
+			filtered, removed, ferr := dzenFilterJSON(body, reqPath)
 			if ferr != nil {
 				flowLog("DZEN_JSON_SKIP parse-fail")
 			} else if removed > 0 {
@@ -367,7 +367,7 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 			if e1 != nil {
 				flowLog("DZEN_JSON_SKIP gunzip:" + e1.Error())
 			} else {
-				filtered, removed, ferr := dzenFilterJSON(raw)
+				filtered, removed, ferr := dzenFilterJSON(raw, reqPath)
 				switch {
 				case ferr != nil:
 					flowLog("DZEN_JSON_SKIP parse-fail")
@@ -464,14 +464,94 @@ func dzenGzip(b []byte) ([]byte, error) {
 // dzenFilterJSON парсит JSON, логирует найденные рекламные маркеры и
 // удаляет рекламные элементы массивов. Возвращает nil,0,nil если нечего
 // удалять. Любая ошибка -> оригинальный body (fail-open снаружи).
-func dzenFilterJSON(body []byte) ([]byte, int, error) {
+func dzenBoolFlag(m map[string]interface{}, key string) string {
+	if m == nil {
+		return "missing"
+	}
+	v, ok := m[key]
+	if !ok {
+		return "missing"
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return "missing"
+	}
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+func dzenCountElems(v interface{}) int {
+	switch t := v.(type) {
+	case []interface{}:
+		return len(t)
+	case map[string]interface{}:
+		return len(t)
+	}
+	return 1
+}
+
+// dzenFilterMorePath - 219: точечная фильтрация /api/web/v1/more.
+// Только здесь: top-level ad_items удаляется целиком, items[] выкидываются
+// ТОЛЬКО при isNativeAds==true / isPromoPublication==true (не по наличию ключа).
+func dzenFilterMorePath(root *interface{}, reqPath string) (removed int, adItemsRemoved int, cardsRemoved int) {
+	if reqPath != "/api/web/v1/more" {
+		return 0, 0, 0
+	}
+	m, ok := (*root).(map[string]interface{})
+	if !ok {
+		return 0, 0, 0
+	}
+	if ai, exists := m["ad_items"]; exists && !dzenEmptyVal(ai) {
+		n := dzenCountElems(ai)
+		delete(m, "ad_items")
+		removed++
+		adItemsRemoved = n
+		flowLog(fmt.Sprintf("DZEN_JSON_FIELD_REMOVED path=%s key=ad_items count=%d", reqPath, n))
+	}
+	if arr, ok := m["items"].([]interface{}); ok {
+		kept := arr[:0]
+		for i, el := range arr {
+			em, _ := el.(map[string]interface{})
+			ina := dzenBoolFlag(em, "isNativeAds")
+			ipp := dzenBoolFlag(em, "isPromoPublication")
+			plEmpty := true
+			if pl, ok2 := em["promoLabel"].(map[string]interface{}); ok2 {
+				plEmpty = len(pl) == 0
+			}
+			flowLog(fmt.Sprintf("DZEN_ITEM_FLAGS index=%d isNativeAds=%s isPromoPublication=%s promoLabelEmpty=%v",
+				i, ina, ipp, plEmpty))
+			reason := ""
+			if ina == "true" {
+				reason = "isNativeAds=true"
+			} else if ipp == "true" {
+				reason = "isPromoPublication=true"
+			}
+			if reason != "" {
+				cardsRemoved++
+				removed++
+				flowLog(fmt.Sprintf("DZEN_JSON_CARD_REMOVED path=.items[%d] reason=%s id=%s", i, reason, dzenElemID(em)))
+				continue
+			}
+			kept = append(kept, el)
+		}
+		m["items"] = kept
+	}
+	return removed, adItemsRemoved, cardsRemoved
+}
+
+func dzenFilterJSON(body []byte, reqPath string) ([]byte, int, error) {
 	var v interface{}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	if err := dec.Decode(&v); err != nil {
 		return nil, 0, err
 	}
+	// 219: точечная обработка ленты Дзен
+	mr, adN, cardN := dzenFilterMorePath(&v, reqPath)
 	removed, markers := dzenScrub(&v, "")
+	removed += mr
 	if len(markers) == 0 {
 		flowLog("DZEN_JSON_NO_AD_MARKERS")
 	} else {
@@ -491,6 +571,10 @@ func dzenFilterJSON(body []byte) ([]byte, int, error) {
 	out, err := json.Marshal(v)
 	if err != nil {
 		return nil, 0, err
+	}
+	if adN > 0 || cardN > 0 {
+		flowLog(fmt.Sprintf("DZEN_FEED_FILTER path=%s adItemsRemoved=%d cardsRemoved=%d",
+			reqPath, adN, cardN))
 	}
 	return out, removed, nil
 }
