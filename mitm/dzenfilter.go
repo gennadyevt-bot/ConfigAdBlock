@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -150,7 +151,9 @@ func dzenInjectCSS(html string) string {
 	flowLog("DZEN_COSMETIC_INJECTED")
 	style := "<style data-cablock>\n" + dzenCSS + "</style>"
 	script := `<script data-cablock>(function(){
-var sels='[data-ad-type="direct"],[data-ad-type="banner"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"]';
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"]';
+function rmLabel(root){(root.querySelectorAll?root.querySelectorAll('*'):[]).forEach(function(e){if(e.children.length===0&&/^\s*реклама\s*$/i.test(e.textContent)){var n=e.closest('article')||e.parentElement;if(n)n.remove();}});}
+rmLabel(document);
 function rm(e){var n=e.closest('article')||e.parentElement;if(n){n.remove();}else{e.remove();}}
 function k(){document.querySelectorAll(sels).forEach(function(e){rm(e);});}
 k();
@@ -285,10 +288,19 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 func filterDzenResponse(resp *http.Response, reqPath string) error {
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	resp.Close = true
-	flowLog("DZEN_RESPONSE path=" + reqPath + " ct=" + ct)
+	// 217: полная карта ответов без содержимого
+	defer func() {
+		if resp != nil {
+			flowLog(fmt.Sprintf("DZEN_RESPONSE host=%s method=%s path=%s status=%s ct=%s len=%d",
+				upstreamHost, req.Method, req.URL.Path, resp.Status, ct, resp.ContentLength))
+		}
+	}()
 	// 216: для Дзена снимаем CSP - иначе inline <script> косметики заблокирован
 	resp.Header.Del("Content-Security-Policy")
 	resp.Header.Del("Content-Security-Policy-Report-Only")
+	if strings.Contains(ct, "text/html") {
+		flowLog("DZEN_HTML_RESPONSE path=" + reqPath + " enc=" + resp.Header.Get("Content-Encoding"))
+	}
 	if strings.Contains(ct, "text/html") && (resp.Header.Get("Content-Encoding") == "" || resp.Header.Get("Content-Encoding") == "identity") {
 		const limit = 16 * 1024 * 1024
 		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -297,6 +309,7 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		}
 		if len(body) <= limit {
 			body = []byte(dzenInjectCSS(string(body)))
+			flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath)
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -316,6 +329,13 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 	// 2.0.13/215: JSON-фильтрация ленты Дзена (рекламные элементы
 	// удаляются из массивов целиком -> пустых контейнеров не остаётся).
 	// Fail-open: любая ошибка -> оригинальный body без изменений.
+	// 217: структурная диагностика JSON (только ключи, без содержимого)
+	if strings.Contains(ct, "application/json") && (resp.Header.Get("Content-Encoding") == "" || resp.Header.Get("Content-Encoding") == "identity") {
+		if jb, jerr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024)); jerr == nil {
+			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jb), resp.Body))
+			dzenDiagJSON(reqPath, jb)
+		}
+	}
 	if strings.Contains(ct, "application/json") {
 		const limit = 16 * 1024 * 1024
 		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -657,4 +677,71 @@ func dzenElemIDOf(v interface{}) string {
 		return dzenElemID(m)
 	}
 	return "-"
+}
+
+
+// --- 2.0.15/217: структурная диагностика JSON (только ключи) ---------------
+
+var dzenSuspectKeys = []string{"feed", "items", "cards", "publications", "recommendations",
+	"content", "blocks", "stories", "entries", "documents", "zen", "rtb", "banner",
+	"advert", "advertising", "native", "direct"}
+
+// dzenDiagJSON логирует СТРУКТУРУ ответа: top-level ключи и объекты с
+// подозрительными ключами. Ни одно значение не пишется - только имена ключей.
+func dzenDiagJSON(reqPath string, body []byte) {
+	var v interface{}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		return
+	}
+	if m, ok := v.(map[string]interface{}); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if len(keys) > 24 {
+			keys = keys[:24]
+		}
+		flowLog("DZEN_JSON_KEYS path=" + reqPath + " keys=" + strings.Join(keys, ","))
+	}
+	dzenSuspectWalk(v, reqPath, reqPath, 0)
+}
+
+func dzenSuspectWalk(node interface{}, reqPath, jpath string, depth int) {
+	if depth > 4 {
+		return
+	}
+	switch t := node.(type) {
+	case map[string]interface{}:
+		var hits []string
+		for k := range t {
+			kl := strings.ToLower(k)
+			for _, s := range dzenSuspectKeys {
+				if kl == s || strings.Contains(kl, s) {
+					hits = append(hits, k)
+					break
+				}
+			}
+		}
+		if len(hits) > 0 {
+			sort.Strings(hits)
+			if len(hits) > 10 {
+				hits = hits[:10]
+			}
+			flowLog("DZEN_JSON_SUSPECT path=" + reqPath + " jsonPath=" + jpath + " keys=" + strings.Join(hits, ","))
+		}
+		for k, val := range t {
+			dzenSuspectWalk(val, reqPath, jpath+"."+k, depth+1)
+		}
+	case []interface{}:
+		if len(t) > 3 {
+			dzenSuspectWalk(t[0], reqPath, jpath+"[0]", depth+1)
+		} else {
+			for i, el := range t {
+				dzenSuspectWalk(el, reqPath, fmt.Sprintf("%s[%d]", jpath, i), depth+1)
+			}
+		}
+	}
 }

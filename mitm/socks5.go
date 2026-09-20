@@ -132,6 +132,10 @@ func socksHandleConn(c net.Conn) {
 				atomic.AddInt64(&transportBlocked, 1)
 				return
 			}
+			// 217: любые dzen-related host'ы, идущие мимо MITM - в лог
+			if perr == nil && strings.Contains(sni, "dzen") && !isDzenHost(sni) {
+				flowLog("DZEN_RELATED_HOST host=" + target + " sni=" + sni)
+			}
 			// 2.0.7 (209): selective content-MITM на СОБСТВЕННОМ коде
 			// (certForName + sniffConn + bypassCache, без goproxy).
 			// Fail-open на каждом этапе; TLS-отказ -> bypass -> direct.
