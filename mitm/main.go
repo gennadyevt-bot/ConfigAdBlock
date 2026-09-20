@@ -60,6 +60,9 @@ func proxyCurAddr() string {
 	return "127.0.0.1:0"
 }
 
+// ProxyCurAddr - экспорт для Kotlin (gobind декапитализирует первую букву).
+func ProxyCurAddr() string { return proxyCurAddr() }
+
 var (
 	proxyMu        sync.Mutex
 	proxySrv       *http.Server
