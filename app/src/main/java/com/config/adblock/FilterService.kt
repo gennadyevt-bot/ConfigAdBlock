@@ -287,7 +287,6 @@ class FilterService : VpnService() {
                 .putLong("sess_at", System.currentTimeMillis()).apply()
             // 0.5.73: список SNI очищается при каждом запуске VPN
             try { mitm.Mitm.resetSNILog() } catch (_: Exception) {}
-            try { mitm.Mitm.setContentFilter(contentFilter) } catch (_: Exception) {}
             // 0.5.79: список DNS_ALLOW тоже очищается при старте VPN
             try { mitm.Mitm.resetDNSAllowLog() } catch (_: Exception) {}
             // 0.5.75: аварийный автостоп убран — пользователь выключает сам
@@ -344,6 +343,7 @@ class FilterService : VpnService() {
             //     первый), всё остальное SAFE_DIRECT. Без fake-IP.
             //  content_filter=false -> стабильный DNS_ONLY как в 0.5.81.
             val contentFilter = sp0.getBoolean("content_filter", true)
+            try { mitm.Mitm.setContentFilter(contentFilter) } catch (_: Exception) {}
             val b = Builder()
                 .setSession("Config AdBlock")
                 .setMtu(1500)
