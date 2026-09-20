@@ -51,7 +51,10 @@ div[class*="news"] > div[class*="_banner_"],
 .zenad-card-rtb,
 .news-mt-advert,
 .mg-advert > div[class*="loader"],
-div[class*="Advert_"] { display: none !important; }
+div[class*="Advert_"],
+div[class^="BrandingAdvert"],
+.news-advert-column,
+.article-render-mobile__embed_embed-type_yandex-direct { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
@@ -155,16 +158,51 @@ func firstAFromDNS(ans []byte) (string, error) {
 }
 
 func dzenInjectCSS(html string) string {
-	flowLog("DZEN_COSMETIC_INJECTED")
 	style := "<style data-cablock>\n" + dzenCSS + "</style>"
 	script := `<script data-cablock>(function(){
-var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"]';
-function rmLabel(root){(root.querySelectorAll?root.querySelectorAll('*'):[]).forEach(function(e){if(e.children.length===0&&/^\s*реклама\s*$/i.test(e.textContent)){var n=e.closest('article')||e.parentElement;if(n)n.remove();}});}
-rmLabel(document);
-function rm(e){var n=e.closest('article')||e.parentElement;if(n){n.remove();}else{e.remove();}}
-function k(){document.querySelectorAll(sels).forEach(function(e){rm(e);});}
-k();
-new MutationObserver(function(ms){ms.forEach(function(m){if(!m.addedNodes)return;m.addedNodes.forEach(function(nd){if(nd.nodeType!==1)return;if(nd.matches&&nd.matches(sels)){rm(nd);}if(nd.querySelectorAll){nd.querySelectorAll(sels).forEach(function(e){rm(e);});}});});}).observe(document.documentElement,{childList:true,subtree:true});
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct';
+function rmSel(root){
+  if(!root.querySelectorAll)return;
+  if(root.matches&&root.matches(sels))root.remove();
+  root.querySelectorAll(sels).forEach(function(e){e.remove();});
+}
+function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
+function rmLabel(root){
+  if(!root.querySelectorAll)return;
+  var all=(root.matches&&root.matches('*'))?[root]:[];
+  root.querySelectorAll('*').forEach(function(e){all.push(e);});
+  for(var k=0;k<all.length;k++){
+    var e=all[k];
+    if(!/^\s*Реклама\s*$/i.test(e.textContent||''))continue;
+    var n=e;
+    for(var up=0;up<8&&n&&n.parentElement;up++){
+      n=n.parentElement;
+      var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
+      var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
+      var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
+      if(cls||triple){n.remove();break;}
+    }
+  }
+}
+function emptyAdWrap(root){
+  if(!root.querySelectorAll)return;
+  root.querySelectorAll('div').forEach(function(d){
+    var s=((d.className&&d.className.toString)?d.className.toString():'')+' '+(d.id||'');
+    if(!/advert|banner|adbox|rtb|zenad|loader|skeleton/i.test(s))return;
+    if((d.textContent||'').trim()!=='')return;
+    if(d.querySelector('img,video,article,[role="article"]'))return;
+    d.remove();
+  });
+}
+function scan(root){try{rmSel(root);rmLabel(root);emptyAdWrap(root);}catch(_){}}
+scan(document);
+[0,250,750,1500,3000].forEach(function(t){setTimeout(function(){scan(document);},t);});
+new MutationObserver(function(ms){
+  ms.forEach(function(m){
+    if(!m.addedNodes)return;
+    m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);});
+  });
+}).observe(document.documentElement,{childList:true,subtree:true});
 })();</script>`
 	low := strings.ToLower(html)
 	idx := strings.Index(low, "</head>")
@@ -344,8 +382,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		}
 		if len(body) <= limit {
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=223")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=223")
+			flowLog("DZEN_COSMETIC_RULESET=224")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=224")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))

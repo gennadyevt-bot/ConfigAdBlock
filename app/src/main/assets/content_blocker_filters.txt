@@ -48,3 +48,14 @@ www.dzen.ru##.news-mt-advert
 www.dzen.ru##.mg-advert > div[class*="loader"]
 www.dzen.ru##div[class*="Advert_"]
 m.dzen.ru##div[class*="Advert_"]
+
+! --- 224: внешние рекламные оболочки / skeleton ---
+dzen.ru##div[class^="BrandingAdvert"]
+dzen.ru##.news-advert-column
+dzen.ru##.article-render-mobile__embed_embed-type_yandex-direct
+dzen.ru##.news-app__content div[class*="__column_myTarget mg-grid__item"] div[class*="__loader "]
+www.dzen.ru##div[class^="BrandingAdvert"]
+www.dzen.ru##.news-advert-column
+www.dzen.ru##.article-render-mobile__embed_embed-type_yandex-direct
+m.dzen.ru##div[class^="BrandingAdvert"]
+m.dzen.ru##.news-advert-column
