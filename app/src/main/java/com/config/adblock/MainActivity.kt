@@ -222,6 +222,28 @@ class MainActivity : AppCompatActivity() {
         return line + (if (aaaaCache.isNotEmpty()) "\n" + aaaaCache else "")
     }
 
+    // 2.0.12: префиксы SHA-256 всех CA с тем же именем (диагностика
+    // "других CA с тем же именем: 5" - чтобы отличить текущий от старых).
+    private fun caTwinsLine(): String {
+        return try {
+            val tf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            tf.init(null as java.security.KeyStore?)
+            val tm = tf.trustManagers[0] as X509TrustManager
+            val sb = StringBuilder()
+            var n = 0
+            for (c in tm.acceptedIssuers) {
+                if (c.subjectX500Principal.name.contains("Config AdBlock")) {
+                    n++
+                    val d = java.security.MessageDigest.getInstance("SHA-256").digest(c.encoded)
+                    sb.append(String.format("%02X%02X%02X... ", d[0], d[1], d[2]))
+                }
+            }
+            "SAME-NAME CA count=" + n + " prefixes: " + (if (sb.isEmpty()) "-" else sb.toString()) + "\n"
+        } catch (e: Exception) {
+            "SAME-NAME CA scan fail: " + (e.message ?: "?") + "\n"
+        }
+    }
+
     private fun saveStopToLog() {
         try {
             val prefs = getSharedPreferences("stats", MODE_PRIVATE)
@@ -324,7 +346,7 @@ class MainActivity : AppCompatActivity() {
         val lastLine = if (lastAt > sessAt && lastMst.isNotEmpty()) {
             "прошлая сессия @" + fmt.format(java.util.Date(lastAt)) + ": " + lastMst + " fb " + prefs.getLong("last_t443", 0) + " quic " + prefs.getLong("last_udp_seen", 0) + "/" + prefs.getLong("last_quic_drops", 0)
         } else ""
-        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + sessLine + "\n" + (if (v6line.isNotEmpty()) v6line + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (tst.isNotEmpty()) tst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + (if (lastLine.isNotEmpty()) lastLine + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
+        val lc = (if (modeline.isNotEmpty()) modeline + " dir tx=" + dtx + " rx=" + drx + "\n" else "") + sessLine + "\n" + (if (v6line.isNotEmpty()) v6line + "\n" else "") + (if (cai.isNotEmpty()) cai + " " + lfv + "\n" else "") + caTwinsLine() + (if (mst.isNotEmpty()) mst + "\n" else "") + (if (tst.isNotEmpty()) tst + "\n" else "") + (if (sst.isNotEmpty()) sst + "\n" else "") + (if (lastLine.isNotEmpty()) lastLine + "\n" else "") + "TCP " + prefs.getLong("tcp_try", 0) + "/" + prefs.getLong("tcp_ok", 0) + " DNS " + prefs.getLong("udp_try", 0) + "/" + prefs.getLong("dns_got", 0) + "/" + prefs.getLong("udp_ok", 0) + "\n443: " + prefs.getLong("t443", 0) + " quic: " + prefs.getLong("quic", 0) + "\nпрокси: ok " + prefs.getLong("gp_ok", 0) + " fail " + prefs.getLong("gp_fail", 0) + " dial " + prefs.getLong("gp_dial", 0)
         val eerr = prefs.getString("eng_err", "") ?: ""
         val st = prefs.getString("selftest", "") ?: ""
         val pst = prefs.getString("proxy_state", "") ?: ""

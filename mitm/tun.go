@@ -554,6 +554,13 @@ func LeafVerify() string { caDiagMu.Lock(); defer caDiagMu.Unlock(); return leaf
 
 // verifyLeafSelfTest: генерируем тестовый leaf и проверяем цепочку
 // до нашего CA так, как это делал бы клиент (issuer, SAN, срок, подпись).
+// currentMITMCA возвращает активный CA (x509) - для диагностики цепочки.
+func currentMITMCA() *x509.Certificate {
+	mitmCAMu.Lock()
+	defer mitmCAMu.Unlock()
+	return mitmCAX509
+}
+
 func verifyLeafSelfTest() {
 	caDiagMu.Lock()
 	defer caDiagMu.Unlock()
@@ -668,6 +675,14 @@ func certForName(name string) (*tls.Certificate, error) {
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, err
+	}
+	// 2.0.12: отдаём ПОЛНУЮ цепочку [leaf, ca]. Раньше клиент получал только
+	// leaf, а на устройстве с НЕСКОЛЬКИМИ одноимёнными CA ("Config AdBlock CA")
+	// верификатор матчил leaf по имени на СТАРЫЙ экземпляр из стора ->
+	// подпись не сходилась -> "tls: unknown certificate". С chain=[leaf,ca]
+	// якорем становится точно тот CA, что прислан.
+	if len(ca.Certificate) > 0 {
+		pair.Certificate = append(pair.Certificate, ca.Certificate[0])
 	}
 	certCacheMu.Lock()
 	certCache[name] = &pair

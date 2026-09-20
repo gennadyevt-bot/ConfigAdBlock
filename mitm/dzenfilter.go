@@ -12,6 +12,8 @@ package mitm
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"crypto/x509"
 	"bytes"
 	"crypto/tls"
 	"fmt"
@@ -169,6 +171,8 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		return false, false
 	}
 	flowLog("DZEN_CA_READY host=" + sni)
+	// 2.0.12: фактическая диагностика цепочки ДО handshake
+	dzenDiagChain(sni, leaf)
 	handled = true
 	defer func() {
 		if r := recover(); r != nil {
@@ -294,4 +298,43 @@ func filterDzenResponse(resp *http.Response) error {
 	}
 
 	return nil
+}
+
+
+// dzenDiagChain - фактическая проверка TLS-цепочки Дзена ДО handshake:
+// SAN, issuer, подпись ТЕКУЩИМ CA, EKU, срок + длина/хэши реально
+// отправляемой цепочки. Ответ на вопрос "почему unknown certificate".
+func dzenDiagChain(host string, cert *tls.Certificate) {
+	chainLen := len(cert.Certificate)
+	flowLog(fmt.Sprintf("DZEN_CHAIN_LEN=%d", chainLen))
+	for i, der := range cert.Certificate {
+		fp := sha256.Sum256(der)
+		flowLog(fmt.Sprintf("DZEN_CHAIN_%d_SHA256=%X", i, fp[:8]))
+	}
+	if chainLen == 0 {
+		flowLog("LEAF_HOST=" + host + " LEAF_MISSING=true")
+		return
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		flowLog("LEAF_HOST=" + host + " LEAF_PARSE_FAIL=" + err.Error())
+		return
+	}
+	sanOK := leaf.VerifyHostname(host) == nil
+	cur := currentMITMCA()
+	issuerMatch := cur != nil && leaf.Issuer.String() == cur.Subject.String()
+	sigOK := false
+	if cur != nil {
+		sigOK = leaf.CheckSignatureFrom(cur) == nil
+	}
+	serverAuth := false
+	for _, u := range leaf.ExtKeyUsage {
+		if u == x509.ExtKeyUsageServerAuth {
+			serverAuth = true
+		}
+	}
+	now := time.Now()
+	valid := now.After(leaf.NotBefore) && now.Before(leaf.NotAfter)
+	flowLog(fmt.Sprintf("LEAF_HOST=%s SAN_OK=%v ISSUER_MATCH=%v SIG_OK=%v SERVER_AUTH=%v VALID=%v IsCA=%v",
+		host, sanOK, issuerMatch, sigOK, serverAuth, valid, leaf.IsCA))
 }
