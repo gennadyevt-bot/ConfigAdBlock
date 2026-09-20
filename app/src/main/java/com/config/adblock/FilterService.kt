@@ -664,8 +664,31 @@ class FilterService : VpnService() {
             saveErr("HEV_LOAD_OK")
             saveErr("HEV_START=" + ok)
 
+            var lastFlowLen = 0
             while (running && hev.htproxy.TProxyService.isRunning()) {
                 try { Thread.sleep(1000) } catch (_: Exception) { break }
+                // 228: постоянный буфер DOM-диагностики (не вытесняется flowlog)
+                try {
+                    val fl = mitm.Mitm.flowLog()
+                    if (fl.length < lastFlowLen) lastFlowLen = 0
+                    if (fl.length > lastFlowLen) {
+                        val fresh = fl.substring(lastFlowLen)
+                        lastFlowLen = fl.length
+                        val buf = sp.getString("dzen_dom_diag", "") ?: ""
+                        val sb = StringBuilder(buf)
+                        for (line in fresh.split("\n")) {
+                            val t = line.trim()
+                            if (t.contains("DZEN_DOM_DIAG") || t.contains("DZEN_JS_ALIVE") ||
+                                t.contains("DZEN_IFRAME_DIAG") || t.contains("DZEN_CAROUSEL") ||
+                                t.contains("DZEN_TOP_BANNER") || t.contains("DZEN_APP_AD_REMOVED")) {
+                                sb.append(t).append("\n")
+                            }
+                        }
+                        val lines = sb.toString().split("\n").filter { it.isNotBlank() }
+                        val s2 = if (lines.size > 20) lines.takeLast(20).joinToString("\n") + "\n" else sb.toString()
+                        if (s2 != buf) sp.edit().putString("dzen_dom_diag", s2).apply()
+                    }
+                } catch (_: Exception) {}
                 // 2.0.9/211: flowlog на экран раз в секунду вместе со stackstats
                 sp.edit()
                     .putString("stackstats", mitm.Mitm.transportFilterStats() + " " + mitm.Mitm.contentStats())
