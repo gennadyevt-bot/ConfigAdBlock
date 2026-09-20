@@ -672,7 +672,7 @@ class FilterService : VpnService() {
         } finally {
             // 211: снапшот flowlog ДО остановки SOCKS/HEV
             try {
-                sp.edit()
+                getSharedPreferences("stats", MODE_PRIVATE).edit()
                     .putString("last_flowlog", mitm.Mitm.flowLog())
                     .putString("flowlog", mitm.Mitm.flowLog())
                     .apply()
