@@ -1125,9 +1125,11 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// только к белым доменам и делаем mini-MITM с инжектом CSS.
 	if perr == nil && contentFilterEnabled() && isDzenHost(peekSNI) {
 		flowLog(fmt.Sprintf("#%d CONTENT_MITM sni=%q dst=%s", fid, peekSNI, hp))
-		handleDzenMITM(conn, peekSNI)
-		closeReason = "contentMitm"
-		return
+		handled, _ := handleDzenMITM(conn, peekSNI, raw)
+		if handled {
+			closeReason = "contentMitm"
+			return
+		}
 	}
 	if perr != nil {
 		addSNILog("DIRECT", "(no-sni) "+hp)
