@@ -173,8 +173,9 @@ new MutationObserver(function(ms){ms.forEach(function(m){if(!m.addedNodes)return
 // sniffConn. Fail-open: отказ от сертификата/любая TLS-ошибка -> sni в
 // bypassCache, следующий reconnect этого sni идёт DIRECT. Никакого goproxy.
 func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok bool) {
-	if isBypassed(sni, "") {
-		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
+	// 220: ONE-SHOT bypass - этот вызов разрешаем direct, следующий снова MITM
+	if bypassConsumeOne(sni) {
+		flowLog("DZEN_BYPASS_ONCE_CONSUMED sni=" + sni)
 		return false, false
 	}
 	flowLog("DZEN_MITM_BEGIN host=" + sni)
@@ -215,9 +216,10 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			strings.Contains(es, "certificate required") ||
 			strings.Contains(es, "certificate verify failed")
 		if certReject {
-			cacheBypass(sni)
+			// 220: НЕ session-wide bypass - только один следующий reconnect
+			bypassOnceSet(sni)
 			flowLog("DZEN_TLS_REJECT host=" + sni + " err=" + es)
-			flowLog("DZEN_BYPASS_CACHE_SET sni=" + sni + " reason=tls_reject")
+			flowLog("DZEN_BYPASS_ONCE_SET sni=" + sni + " reason=tls_reject")
 		} else {
 			flowLog("DZEN_TLS_FAIL host=" + sni + " err=" + es)
 		}

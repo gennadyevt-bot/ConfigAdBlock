@@ -810,7 +810,35 @@ var (
 func unBypassHost(key string) {
 	bypassMu.Lock()
 	delete(bypassCache, key)
+	delete(bypassOnce, key)
 	bypassMu.Unlock()
+}
+
+// --- 220: ONE-SHOT bypass -------------------------------------------------
+// Один TLS reject -> ровно ОДИН reconnect идёт direct (fail-open), следующий
+// снова пробует MITM. Без отравления host'а на всю VPN-сессию. Небольшой TTL
+// защищает от бесконечного быстрого цикла, но НЕ является session bypass.
+var bypassOnce = make(map[string]int64)
+
+const bypassOnceTTL = 30 * time.Second
+
+func bypassOnceSet(key string) {
+	bypassMu.Lock()
+	bypassOnce[key] = time.Now().Add(bypassOnceTTL).UnixNano()
+	bypassMu.Unlock()
+}
+
+// bypassConsumeOne: true, если ЭТОТ вызов - тот единственный direct-выход;
+// запись сразу удаляется, следующий reconnect снова попытка MITM.
+func bypassConsumeOne(key string) bool {
+	bypassMu.Lock()
+	defer bypassMu.Unlock()
+	dl, ok := bypassOnce[key]
+	if !ok {
+		return false
+	}
+	delete(bypassOnce, key)
+	return time.Now().UnixNano() <= dl
 }
 
 func cacheBypass(key string) {
