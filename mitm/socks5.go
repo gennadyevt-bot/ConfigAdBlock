@@ -132,11 +132,16 @@ func socksHandleConn(c net.Conn) {
 				atomic.AddInt64(&transportBlocked, 1)
 				return
 			}
-			// 2.0.4: selective content-MITM ВРЕМЕННО ВЫКЛЮЧЕН (Дзен уходил
-			// через goproxy и переставал открываться). Код ниже сохранён,
-			// вызов отключён - dzen идёт обычным direct relay после SNI-проверки.
+			// 2.0.5: selective content-MITM снова ВКЛЮЧЁН для Дзена
+			// (причина поломки 2.0.3 была в protect() на loopback-сокете ->
+			// теперь dialLocal). Fail-open: ошибка proxy ДО replay ->
+			// direct ниже.
 			if isDzenHost(sni) {
-				flowLog("DZEN_CONTENT_MITM=OFF_DIRECT sni=" + sni)
+				if socksDispatchDzen(c, sni, raw) {
+					atomic.AddInt64(&contentMitmN, 1)
+					return
+				}
+				atomic.AddInt64(&contentMitmErrN, 1)
 			}
 			if len(raw) > 0 {
 				if _, err := up.Write(raw); err != nil {
@@ -372,25 +377,28 @@ func socksParseAddrBytes(b []byte, off int) (string, int, int, bool) {
 // socksDispatchDzen - SELECTIVE content 2.0.3: поток dzen уводим в
 // локальный goproxy (CONNECT + replay перехваченного ClientHello).
 func socksDispatchDzen(c net.Conn, sni string, raw []byte) bool {
-	flowLog("CONTENT_MITM host=" + sni)
-	pconn, err := dialTCP(proxyCurAddr())
+	flowLog("DZEN_MITM_BEGIN host=" + sni)
+	// 2.0.5: dialLocal - локальный 127.0.0.1 proxy НЕ проходит protect()
+	pconn, err := dialLocal(proxyCurAddr())
 	if err != nil {
-		flowLog("CONTENT_MITM_FAIL dial-proxy " + err.Error())
+		flowLog("DZEN_MITM_FAIL dial:" + err.Error())
 		return false
 	}
+	flowLog("DZEN_PROXY_CONNECTED")
 	_ = pconn.SetDeadline(time.Now().Add(15 * time.Second))
 	if _, err := fmt.Fprintf(pconn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", sni, sni); err != nil {
 		_ = pconn.Close()
-		flowLog("CONTENT_MITM_FAIL connect-write")
+		flowLog("DZEN_MITM_FAIL connect-write:" + err.Error())
 		return false
 	}
 	br := bufio.NewReader(pconn)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200") {
 		_ = pconn.Close()
-		flowLog("CONTENT_MITM_FAIL status=" + strings.TrimSpace(status))
+		flowLog("DZEN_MITM_FAIL status:" + strings.TrimSpace(status))
 		return false
 	}
+	flowLog("DZEN_PROXY_200")
 	for {
 		line, lerr := br.ReadString('\n')
 		if lerr != nil || line == "\r\n" || line == "\n" {
@@ -400,10 +408,11 @@ func socksDispatchDzen(c net.Conn, sni string, raw []byte) bool {
 	_ = pconn.SetDeadline(time.Time{})
 	if _, err := pconn.Write(raw); err != nil {
 		_ = pconn.Close()
-		flowLog("CONTENT_MITM_FAIL hello-replay")
+		flowLog("DZEN_MITM_FAIL hello-replay:" + err.Error())
 		return false
 	}
+	flowLog("DZEN_HELLO_REPLAY_OK")
 	socksRelay(c, pconn)
-	flowLog("CONTENT_MITM_DONE host=" + sni)
+	flowLog("DZEN_MITM_DONE host=" + sni)
 	return true
 }

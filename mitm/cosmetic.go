@@ -22,7 +22,7 @@ var cosmeticInject = []byte(`<style>
 [class*="rnet"],[class*="r-ads"],[class*="r-banner"],[id*="r-banner"],
 [aria-label*="реклам"],[class*="ad-slot"],[id*="ad-slot"],[class*="adunit"],[id*="adunit"],
 [class*="commercial"],[id*="commercial"],[class*="sponsor"],[id*="sponsor"],
-	// Дзен 2.0.3: нативные рекламные карточки
+	/* Дзен: нативные рекламные карточки */
 	[data-ad-type="direct"],
 	[data-ad-type="banner"],
 	div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]),

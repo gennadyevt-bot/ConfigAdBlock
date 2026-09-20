@@ -593,9 +593,14 @@ class FilterService : VpnService() {
             val blFile = File(filesDir, "transport-blocklist.txt")
             assets.open("blocklist.txt").use { input -> blFile.outputStream().use { input.copyTo(it) } }
             mitm.Mitm.configureTransportFilter(blFile.absolutePath)
-            // 2.0.4: goproxy НЕ запускаем - selective content-MITM выключен.
-            // (Код запуска сохранён: startProxy(filesDir, blFile) ->
-            // CONTENT_PROXY_OK; stopProxy() в finally.)
+            // 2.0.5: локальный goproxy снова запускаем для selective content.
+            // Ошибка proxy НЕ роняет VPN - DNS/SNI продолжают работать.
+            try {
+                mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                saveErr("CONTENT_PROXY_OK " + mitm.Mitm.proxyCurAddr())
+            } catch (e: Exception) {
+                saveErr("CONTENT_PROXY_FAIL " + (e.message ?: "?"))
+            }
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
                     override fun protect(fd: Long): Boolean {

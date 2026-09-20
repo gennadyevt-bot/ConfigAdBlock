@@ -253,6 +253,12 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		return req, nil
 	})
 	g.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		// 2.0.5: для Дзена снимаем CSP - иначе Dzen блокирует наш
+		// injected <style>/<script>. Другие сайты CSP НЕ трогаем.
+		if ctx != nil && ctx.Req != nil && isDzenHost(ctx.Req.URL.Hostname()) {
+			resp.Header.Del("Content-Security-Policy")
+			resp.Header.Del("Content-Security-Policy-Report-Only")
+		}
 		return filterHTML(resp)
 	})
 
