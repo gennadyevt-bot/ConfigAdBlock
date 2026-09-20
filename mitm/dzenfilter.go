@@ -33,12 +33,16 @@ div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]
 div[id^="ad-"][class*="__isStretched"],
 div[class*="MyTargetAdvert"],
 div[data-testid="bottom-ad"],
-div[class*="__advertItem "] { display: none !important; }
+div[class*="__advertItem "],
+div[class^="desktop2--redesign-feed__"] div:has(> article[class*="--card-rtb__"]),
+div[aria-label="Лента Дзена"] div + article[class*="--card-rtb__"],
+div[class^="dzen-desktop--feed__itemWrap-"],
+div[class^="dzen-desktop--"][class*="__cardWrapper-"] ~ article:has([class*="__adBox-"]) { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
 	h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
-	return h == "dzen.ru" || h == "www.dzen.ru"
+	return h == "dzen.ru" || h == "www.dzen.ru" || h == "m.dzen.ru"
 }
 
 // dzenFakeDNSAnswer: A-запись -> 10.0.0.3; AAAA -> NOERROR пустой

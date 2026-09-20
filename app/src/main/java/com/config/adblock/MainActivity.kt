@@ -328,8 +328,20 @@ class MainActivity : AppCompatActivity() {
             else -> (if (ping.isNotEmpty()) ping + "\n" else "") + "Последнее: " + lasterr + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
         }
         if (modeline == "MODE=HEV_DNS_SNI") {
+            // 2.0.8: всегда показываем хвост flowlog — один тест на Дзене
+            // видно: прошёл ли TLS MITM (DZEN_TLS_OK), заинжектился ли CSS
+            // (DZEN_HTML_FILTERED) или браузер отверг сертификат
+            // (DZEN_TLS_REJECT -> DZEN_BYPASS_DIRECT).
+            val flowTail = fl.lineSequence()
+                .filter { it.isNotBlank() }
+                .takeLast(14)
+                .joinToString("\n")
             err.text = (if (running) "Фильтр DNS/SNI включён" else "Фильтр остановлен") +
-                "\n" + sst + "\nHTTPS-содержимое и встроенные рекламные блоки пока не фильтруются." +
+                "\n" + sst +
+                (if (flowTail.isNotEmpty())
+                    "\n--- DZEN flowlog (последние) ---\n" + flowTail
+                else
+                    "\nflowlog пуст — открой Дзен в браузере и вернись сюда") +
                 (if (!running) "\n\nЖурнал:\n" + logText else "")
         }
         err.textSize = if (running || consentNeeded) 13f else 11f
