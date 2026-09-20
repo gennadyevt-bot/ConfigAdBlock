@@ -178,6 +178,7 @@ function sendIframe(host){
   iframeSeen[host]=1;iframeSent++;
   try{fetch('/__configadblock_diag?d='+encodeURIComponent('IFRAME host='+host),{credentials:'omit',cache:'no-store'}).catch(function(){});}catch(_){}
 }
+function marker(e){try{fetch('/__configadblock_diag?d='+encodeURIComponent(e),{credentials:'omit',cache:'no-store'}).catch(function(){});}catch(_){}}
 function sigOf(e){
   var parts=[],n=e;
   for(var k=0;k<7&&n;k++){
@@ -197,28 +198,74 @@ function rmSel(root){
   root.querySelectorAll(sels).forEach(function(e){e.remove();});
 }
 function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
-var ADLABEL=/^\s*Реклама(?:\s+\d+\+)?\s*$/i;
+var ADLABEL=/^\s*(?:реклама|соцреклама)(?:\s*\d+\+)?\s*$/i;
+function carouselInfo(n){
+  var kids=n.children;
+  if(!kids||kids.length<2)return null;
+  var first=kids[0],same=0;
+  for(var i=0;i<kids.length;i++){if(kids[i].tagName===first.tagName&&kids[i].children)same++;}
+  if(same<2)return null;
+  var dots=!!n.querySelector('[class*="dot"],[class*="pagination"],[class*="indicator"],[class*="bullet"],[class*="swiper"]');
+  var horiz=false;
+  try{
+    var cs=getComputedStyle(n);
+    if((cs.overflowX==='auto'||cs.overflowX==='scroll')&&n.scrollWidth>n.clientWidth+40)horiz=true;
+  }catch(_){}
+  if(dots||horiz)return{slides:same,dots:dots};
+  return null;
+}
 function rmLabel(root){
   if(!root.querySelectorAll)return;
   var all=(root.matches&&root.matches('*'))?[root]:[];
   root.querySelectorAll('*').forEach(function(e){all.push(e);});
   for(var k=0;k<all.length;k++){
     var e=all[k];
-    if(!ADLABEL.test(e.textContent||''))continue;
-    sendDiag(sigOf(e));
-    var n=e,appHit=false;
+    var mt=e.textContent||'';
+    if(!ADLABEL.test(mt))continue;
+    var nearTop=false;
+    try{var r=e.getBoundingClientRect();nearTop=(r.top>=0&&r.top<window.innerHeight*1.5);}catch(_){}
+    sendDiag('MARKER='+mt.trim().slice(0,20)+' CAR=? :: '+sigOf(e));
+    var n=e,car=null;
     for(var up=0;up<8&&n&&n.parentElement;up++){
       n=n.parentElement;
+      var ci=carouselInfo(n);
+      if(ci){car={node:n,info:ci};break;}
       var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
       var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
       var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
-      // 226: app-install/native карточка: метка + Рейтинг и отзывы + О приложении
-      var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&hasT(n,'Реклама');
-      if(app&&!appHit){appHit=true;sendDiag(sigOf(n));}
-      if(triple)sendDiag(sigOf(n));
+      var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&(hasT(n,'Реклама')||hasT(n,'реклама'));
+      if(app)sendDiag('APP :: '+sigOf(n));
+      if(triple)sendDiag('TRIPLE :: '+sigOf(n));
       if(cls||triple||app){
-        if(app){try{fetch('/__configadblock_diag?d='+encodeURIComponent('APPAD'),{credentials:'omit'}).catch(function(){});}catch(_){}}
+        if(app)marker('APPAD');
+        sendDiag('CAR=false :: slides=0 dots=false :: '+sigOf(n));
         n.remove();break;
+      }
+    }
+    if(car){
+      sendDiag('CAROUSEL slides='+car.info.slides+' dots='+car.info.dots+' :: '+sigOf(car.node));
+      marker('CAROUSEL');
+      car.node.remove();
+      marker('CARWRAPPER');
+      continue;
+    }
+    if(!n||!n.parentElement){
+      // верхний standalone-баннер: нет сильного класса, но метка в верхней части
+      if(nearTop){
+        var b=e;
+        for(var u2=0;u2<5&&b.parentElement;u2++){
+          b=b.parentElement;
+          var bh=0;
+          try{bh=b.getBoundingClientRect().height;}catch(_){}
+          if(bh>window.innerHeight*0.6)break;
+          var sib=b.parentElement?b.parentElement.children.length:1;
+          if(sib<=3&&bh>40){
+            sendDiag('TOPBANNER :: '+sigOf(b));
+            marker('TOPBANNER');
+            b.remove();
+            break;
+          }
+        }
       }
     }
   }
@@ -239,8 +286,7 @@ function scanIframes(root){
     var h='';
     try{var u=new URL(f.src||'',location.href);h=u.hostname||'';}catch(_){}
     if(h)sendIframe(h);
-    var same=false;
-    try{var doc=f.contentDocument;if(doc&&doc.documentElement){same=true;scan(doc.documentElement);}}catch(_){}
+    try{var doc=f.contentDocument;if(doc&&doc.documentElement)scan(doc.documentElement);}catch(_){}
   });
 }
 function scanShadows(root){
@@ -249,24 +295,17 @@ function scanShadows(root){
     if(shadowCount>=20)return;
     var sr=null;
     try{sr=e.shadowRoot;}catch(_){}
-    if(sr&&sr.documentElement!==undefined||sr){
+    if(sr){
       var key=sigOf(e);
       if(shadowSeen.indexOf(key)<0){
         shadowSeen.push(key);shadowCount++;
         scan(sr);
-        try{
-          new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);});});}).observe(sr,{childList:true,subtree:true});
-        }catch(_){}
+        try{new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);});});}).observe(sr,{childList:true,subtree:true});}catch(_){}
       }
     }
   });
 }
-function scan(root){
-  try{
-    rmSel(root);rmLabel(root);emptyAdWrap(root);
-    scanIframes(root);scanShadows(root);
-  }catch(_){}
-}
+function scan(root){try{rmSel(root);rmLabel(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);}catch(_){}}
 scan(document);
 [0,250,750,1500,3000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -373,11 +412,18 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			if len(q) > 1000 {
 				q = q[:1000]
 			}
-			if strings.HasPrefix(q, "IFRAME host=") {
+			switch {
+			case strings.HasPrefix(q, "IFRAME host="):
 				flowLog("DZEN_IFRAME_DIAG host=" + strings.TrimPrefix(q, "IFRAME host="))
-			} else if q == "APPAD" {
+			case q == "APPAD":
 				flowLog("DZEN_APP_AD_REMOVED")
-			} else if q != "" {
+			case q == "CAROUSEL":
+				flowLog("DZEN_CAROUSEL_AD_FOUND")
+			case q == "CARWRAPPER":
+				flowLog("DZEN_CAROUSEL_WRAPPER_REMOVED")
+			case q == "TOPBANNER":
+				flowLog("DZEN_TOP_BANNER_REMOVED")
+			case q != "":
 				flowLog("DZEN_DOM_DIAG " + q)
 			}
 			dr := &http.Response{StatusCode: 204, Status: "204 No Content", Proto: "HTTP/1.1",
@@ -473,8 +519,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		}
 		if len(body) <= limit {
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=226")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=226")
+			flowLog("DZEN_COSMETIC_RULESET=227")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=227")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
