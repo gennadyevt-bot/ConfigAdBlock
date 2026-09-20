@@ -36,6 +36,8 @@ const dzenCSS = `[data-ad-type="direct"],
 div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]),
 div[id^="ad-"][class*="__isStretched"],
 div[class*="MyTargetAdvert"],
+.card-rtb,
+[class*="adBox"],
 div[data-testid="bottom-ad"],
 div[class*="__advertItem "],
 div[class^="desktop2--redesign-feed__"] div:has(> article[class*="--card-rtb__"]),
@@ -145,13 +147,21 @@ func firstAFromDNS(ans []byte) (string, error) {
 }
 
 func dzenInjectCSS(html string) string {
+	flowLog("DZEN_COSMETIC_INJECTED")
 	style := "<style data-cablock>\n" + dzenCSS + "</style>"
+	script := `<script data-cablock>(function(){
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"]';
+function rm(e){var n=e.closest('article')||e.parentElement;if(n){n.remove();}else{e.remove();}}
+function k(){document.querySelectorAll(sels).forEach(function(e){rm(e);});}
+k();
+new MutationObserver(function(ms){ms.forEach(function(m){if(!m.addedNodes)return;m.addedNodes.forEach(function(nd){if(nd.nodeType!==1)return;if(nd.matches&&nd.matches(sels)){rm(nd);}if(nd.querySelectorAll){nd.querySelectorAll(sels).forEach(function(e){rm(e);});}});});}).observe(document.documentElement,{childList:true,subtree:true});
+})();</script>`
 	low := strings.ToLower(html)
-	i := strings.Index(low, "</head>")
-	if i > 0 {
-		return html[:i] + style + "\n" + html[i:]
+	idx := strings.Index(low, "</head>")
+	if idx > 0 {
+		return html[:idx] + style + "\n" + script + "\n" + html[idx:]
 	}
-	return style + "\n" + html
+	return style + "\n" + script + "\n" + html
 }
 
 // handleDzenMITM — mini-MITM ТОЛЬКО для dzen.ru.
@@ -259,7 +269,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	}
 	defer resp.Body.Close()
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if err := filterDzenResponse(resp); err != nil {
+	if err := filterDzenResponse(resp, req.URL.Path); err != nil {
 		flowLog("DZEN_MITM_FAIL body:" + err.Error())
 		return true, false
 	}
@@ -272,9 +282,13 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 }
 
 // Keep the body reader consistent with any rewritten content and length.
-func filterDzenResponse(resp *http.Response) error {
+func filterDzenResponse(resp *http.Response, reqPath string) error {
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	resp.Close = true
+	flowLog("DZEN_RESPONSE path=" + reqPath + " ct=" + ct)
+	// 216: для Дзена снимаем CSP - иначе inline <script> косметики заблокирован
+	resp.Header.Del("Content-Security-Policy")
+	resp.Header.Del("Content-Security-Policy-Report-Only")
 	if strings.Contains(ct, "text/html") && (resp.Header.Get("Content-Encoding") == "" || resp.Header.Get("Content-Encoding") == "identity") {
 		const limit = 16 * 1024 * 1024
 		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -322,7 +336,7 @@ func filterDzenResponse(resp *http.Response) error {
 				flowLog("DZEN_JSON_SKIP parse-fail")
 			} else if removed > 0 {
 				final = filtered
-				flowLog(fmt.Sprintf("DZEN_JSON_FILTERED removed=%d", removed))
+				flowLog(fmt.Sprintf("DZEN_JSON_FILTERED path=%s removed=%d", reqPath, removed))
 			}
 		case "gzip":
 			raw, e1 := dzenGunzip(body)
@@ -339,7 +353,7 @@ func filterDzenResponse(resp *http.Response) error {
 						flowLog("DZEN_JSON_SKIP regzip:" + e2.Error())
 					} else {
 						final = out
-						flowLog(fmt.Sprintf("DZEN_JSON_FILTERED removed=%d", removed))
+						flowLog(fmt.Sprintf("DZEN_JSON_FILTERED path=%s removed=%d", reqPath, removed))
 					}
 				}
 			}
@@ -505,8 +519,87 @@ func dzenElemID(m map[string]interface{}) string {
 	return "-"
 }
 
-// dzenScrub рекурсивно обходит JSON: рекламные ЭЛЕМЕНТЫ массивов удаляет
-// целиком (чтобы место схлопнулось), маркеры в ключах - только логирует.
+// dzenContainsStrongAdSignal - СИЛЬНЫЕ рекламные признаки во всём subtree
+// карточки (включая вложенные data/content/meta). Консервативно: generic
+// "promo" и любое вхождение "ad" НЕ считаются рекламой.
+func dzenContainsStrongAdSignal(v interface{}, path string) (bool, string, string) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			kl := strings.ToLower(k)
+			p := path + "." + k
+			switch kl {
+			case "isad", "is_ad":
+				if b, ok := val.(bool); ok && b {
+					return true, kl + "=true", p
+				}
+			case "adtype", "ad_type":
+				if s, ok := val.(string); ok && dzenStrongAdType(s) {
+					return true, kl + "=" + s, p
+				}
+			case "adfox", "nativead", "native_ad", "advertisement", "advertising",
+				"yandexad", "yandex_ad", "zen_ad", "direct":
+				if !dzenEmptyVal(val) {
+					return true, "key:" + kl, p
+				}
+			}
+			if s, ok := val.(string); ok && dzenStrongAdLabel(s) {
+				return true, "label:" + s, p
+			}
+			if hit, r, mp := dzenContainsStrongAdSignal(val, p); hit {
+				return true, r, mp
+			}
+		}
+	case []interface{}:
+		for i, el := range t {
+			if hit, r, mp := dzenContainsStrongAdSignal(el, fmt.Sprintf("%s[%d]", path, i)); hit {
+				return true, r, mp
+			}
+		}
+	case string:
+		if dzenStrongAdLabel(t) {
+			return true, "label:" + t, path
+		}
+	}
+	return false, "", ""
+}
+
+func dzenStrongAdType(s string) bool {
+	switch strings.ToLower(s) {
+	case "ad", "direct", "banner", "advertising", "advertisement", "native", "nativead", "rtb":
+		return true
+	}
+	return false
+}
+
+func dzenStrongAdLabel(s string) bool {
+	sl := strings.ToLower(s)
+	if strings.Contains(sl, "реклама") || strings.Contains(sl, "соцреклама") ||
+		strings.Contains(sl, "advertisement") {
+		return true
+	}
+	return false
+}
+
+func dzenEmptyVal(v interface{}) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return t == ""
+	case bool:
+		return !t
+	case map[string]interface{}:
+		return len(t) == 0
+	case []interface{}:
+		return len(t) == 0
+	}
+	return false
+}
+
+// dzenScrub: элементы массивов с СИЛЬНЫМ сигналом в любом месте subtree
+// удаляются ЦЕЛИКОМ (контейнер схлопывается); очевидные рекламные поля в
+// map удаляются отдельно. Маркеры в ключах логируются как раньше.
 func dzenScrub(node *interface{}, path string) (int, []string) {
 	removed := 0
 	var markers []string
@@ -517,6 +610,13 @@ func dzenScrub(node *interface{}, path string) (int, []string) {
 			if dzenIsAdKey(kl) {
 				markers = append(markers, fmt.Sprintf("key=%s path=%s type=%T", k, path+"."+k, val))
 			}
+			// отдельный очевидный рекламный payload-объект в map
+			if dzenIsAdObjectKey(kl) && !dzenEmptyVal(val) {
+				delete(t, k)
+				removed++
+				flowLog(fmt.Sprintf("DZEN_JSON_FIELD_REMOVED key=%s path=%s", k, path+"."+k))
+				continue
+			}
 			r, m := dzenScrub(&val, path+"."+k)
 			t[k] = val
 			removed += r
@@ -525,10 +625,11 @@ func dzenScrub(node *interface{}, path string) (int, []string) {
 	case []interface{}:
 		kept := t[:0]
 		for i, el := range t {
-			if m, ok := el.(map[string]interface{}); ok && dzenIsAdElement(m) {
+			// 216: СНАЧАЛА глубокая проверка ВСЕГО subtree карточки
+			if hit, reason, mpath := dzenContainsStrongAdSignal(el, fmt.Sprintf("%s[%d]", path, i)); hit {
 				removed++
-				flowLog(fmt.Sprintf("DZEN_JSON_AD_FOUND key=element path=%s[%d] type=feed-item id=%s",
-					path, i, dzenElemID(m)))
+				flowLog(fmt.Sprintf("DZEN_JSON_CARD_REMOVED path=%s[%d] reason=%s markerPath=%s id=%s",
+					path, i, reason, mpath, dzenElemIDOf(el)))
 				continue
 			}
 			var elv interface{} = el
@@ -540,4 +641,20 @@ func dzenScrub(node *interface{}, path string) (int, []string) {
 		*node = kept
 	}
 	return removed, markers
+}
+
+func dzenIsAdObjectKey(kl string) bool {
+	switch kl {
+	case "adfox", "nativead", "native_ad", "advertisement", "advertising",
+		"yandexad", "yandex_ad", "zen_ad":
+		return true
+	}
+	return false
+}
+
+func dzenElemIDOf(v interface{}) string {
+	if m, ok := v.(map[string]interface{}); ok {
+		return dzenElemID(m)
+	}
+	return "-"
 }
