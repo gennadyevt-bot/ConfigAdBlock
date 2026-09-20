@@ -332,10 +332,8 @@ class MainActivity : AppCompatActivity() {
             // видно: прошёл ли TLS MITM (DZEN_TLS_OK), заинжектился ли CSS
             // (DZEN_HTML_FILTERED) или браузер отверг сертификат
             // (DZEN_TLS_REJECT -> DZEN_BYPASS_DIRECT).
-            val flowTail = fl.lineSequence()
-                .filter { it.isNotBlank() }
-                .takeLast(14)
-                .joinToString("\n")
+            val flowLines = fl.split("\n").filter { it.isNotBlank() }
+            val flowTail = flowLines.subList(java.lang.Math.max(0, flowLines.size - 14), flowLines.size).joinToString("\n")
             err.text = (if (running) "Фильтр DNS/SNI включён" else "Фильтр остановлен") +
                 "\n" + sst +
                 (if (flowTail.isNotEmpty())
