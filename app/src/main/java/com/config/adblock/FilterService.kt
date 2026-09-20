@@ -661,11 +661,22 @@ class FilterService : VpnService() {
 
             while (running && hev.htproxy.TProxyService.isRunning()) {
                 try { Thread.sleep(1000) } catch (_: Exception) { break }
-                sp.edit().putString("stackstats", mitm.Mitm.transportFilterStats()).apply()
+                // 2.0.9/211: flowlog на экран раз в секунду вместе со stackstats
+                sp.edit()
+                    .putString("stackstats", mitm.Mitm.transportFilterStats() + " " + mitm.Mitm.contentStats())
+                    .putString("flowlog", mitm.Mitm.flowLog())
+                    .apply()
             }
         } catch (t: Throwable) {
             saveErr("HEV_FATAL " + t.javaClass.simpleName + ": " + (t.message ?: "?"))
         } finally {
+            // 211: снапшот flowlog ДО остановки SOCKS/HEV
+            try {
+                sp.edit()
+                    .putString("last_flowlog", mitm.Mitm.flowLog())
+                    .putString("flowlog", mitm.Mitm.flowLog())
+                    .apply()
+            } catch (_: Exception) {}
             saveErr("HEV стоп")
             try { hev.htproxy.TProxyService.stop() } catch (_: Exception) {}
             try { mitm.Mitm.stopSocks5() } catch (_: Exception) {}
