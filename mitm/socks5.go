@@ -89,6 +89,19 @@ func socksHandleConn(c net.Conn) {
 	target := net.JoinHostPort(host, strconv.Itoa(port))
 	switch req[1] {
 	case 1: // CONNECT
+		filtering := atomic.LoadInt32(&transportFiltering) == 1
+		if filtering {
+			if hit, _ := checkURL(host, ""); hit {
+				atomic.AddInt64(&transportBlocked, 1)
+				_, _ = c.Write([]byte{5, 2, 0, 1, 0, 0, 0, 0, 0, 0})
+				return
+			}
+			if port == 53 {
+				_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+				transportTCPDNS(c)
+				return
+			}
+		}
 		up, err := dialTCP(target)
 		if err != nil {
 			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
@@ -100,6 +113,18 @@ func socksHandleConn(c net.Conn) {
 		}
 		atomic.AddInt64(&localSocksTCPN, 1)
 		_ = c.SetDeadline(time.Time{})
+		if filtering && port == 443 {
+			raw, sni, _, _ := peekClientHello(c)
+			if hit, _ := checkURL(sni, ""); sni != "" && hit {
+				atomic.AddInt64(&transportBlocked, 1)
+				return
+			}
+			if len(raw) > 0 {
+				if _, err := up.Write(raw); err != nil {
+					return
+				}
+			}
+		}
 		socksRelay(c, up)
 	case 3: // UDP ASSOCIATE
 		uconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
@@ -199,6 +224,30 @@ func socksHandleUDP(ctrl net.Conn, u *net.UDPConn) {
 		payload, host, port, ok := socksParseUDPDatagram(buf[:n])
 		if !ok {
 			continue
+		}
+		if atomic.LoadInt32(&transportFiltering) == 1 {
+			if port == 53 {
+				select {
+				case transportDNSWorkers <- struct{}{}:
+					query := append([]byte(nil), payload...)
+					go func(query []byte, host string, port int, addr *net.UDPAddr) {
+						defer func() { <-transportDNSWorkers }()
+						if ans := transportDNSReply(query); len(ans) > 0 {
+							_, _ = u.WriteToUDP(socksBuildUDPDatagram(host, port, ans), addr)
+						}
+					}(query, host, port, addr)
+				default:
+					atomic.AddInt64(&transportErrors, 1)
+					if ans := transportDNSError(payload, 2); len(ans) > 0 {
+						_, _ = u.WriteToUDP(socksBuildUDPDatagram(host, port, ans), addr)
+					}
+				}
+				continue
+			}
+			if port == 443 {
+				atomic.AddInt64(&transportQUIC, 1)
+				continue
+			}
 		}
 		key := net.JoinHostPort(host, strconv.Itoa(port))
 		up, exists := upstreams[key]

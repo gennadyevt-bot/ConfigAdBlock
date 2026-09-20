@@ -583,11 +583,16 @@ class FilterService : VpnService() {
 
     // ================= transport-core-v2 =================
     // HEV (hev-socks5-tunnel) + локальный SOCKS5 direct-outbound.
-    // ЭТАП 1: чистый full-tunnel, НИКАКОЙ блокировки/фильтрации.
+    // DNS/SNI blocking over the HEV transport.
     private fun runHevTransport() {
         try {
-            saveErr("HEV_ENTER v2 full-tunnel no-blocking")
+            saveErr("HEV_ENTER v2 DNS+SNI filter")
             val sp = getSharedPreferences("stats", MODE_PRIVATE)
+            sp.edit().putString("flowlog", "").putString("snilog", "").putString("dnsallow", "")
+                .putString("stackstats", "Запуск фильтра DNS/SNI…").apply()
+            val blFile = File(filesDir, "transport-blocklist.txt")
+            assets.open("blocklist.txt").use { input -> blFile.outputStream().use { input.copyTo(it) } }
+            mitm.Mitm.configureTransportFilter(blFile.absolutePath)
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
                     override fun protect(fd: Long): Boolean {
@@ -607,6 +612,7 @@ class FilterService : VpnService() {
                 .setSession("Config AdBlock HEV")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
+                .addDnsServer("10.0.0.1")
                 .addRoute("0.0.0.0", 0)
             try {
                 b.addDisallowedApplication(packageName)
@@ -615,8 +621,8 @@ class FilterService : VpnService() {
                 saveErr("HEV DISALLOWED_SELF_FAIL " + (e.message ?: "?"))
             }
             applyExclusions(b)
-            saveErr("MODE=HEV_FULLTUNNEL")
-            sp.edit().putString("modeline", "MODE=HEV_FULLTUNNEL").apply()
+            saveErr("MODE=HEV_DNS_SNI")
+            sp.edit().putString("modeline", "MODE=HEV_DNS_SNI").apply()
 
             var pfd: ParcelFileDescriptor? = null
             var tries = 0
@@ -652,7 +658,7 @@ class FilterService : VpnService() {
 
             while (running && hev.htproxy.TProxyService.isRunning()) {
                 try { Thread.sleep(1000) } catch (_: Exception) { break }
-                sp.edit().putString("stackstats", mitm.Mitm.socksStats()).apply()
+                sp.edit().putString("stackstats", mitm.Mitm.transportFilterStats()).apply()
             }
         } catch (t: Throwable) {
             saveErr("HEV_FATAL " + t.javaClass.simpleName + ": " + (t.message ?: "?"))

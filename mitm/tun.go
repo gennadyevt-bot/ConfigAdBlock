@@ -821,7 +821,7 @@ func (s *sniffConn) Read(p []byte) (int, error) {
 // peekClientHello читает ПЕРВЫЙ TLS record (ClientHello) с сырого conn,
 // не отправляя ничего в ответ. Возвращает сырые байты + разобранные
 // SNI и ALPN. Ошибка = не TLS/таймаут — вызывающий сам решает.
-func peekClientHello(conn adapter.TCPConn) (raw []byte, sni string, alpn []string, err error) {
+func peekClientHello(conn net.Conn) (raw []byte, sni string, alpn []string, err error) {
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	need := 5

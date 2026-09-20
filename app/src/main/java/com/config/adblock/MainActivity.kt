@@ -327,8 +327,14 @@ class MainActivity : AppCompatActivity() {
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
             else -> (if (ping.isNotEmpty()) ping + "\n" else "") + "Последнее: " + lasterr + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
         }
+        if (modeline == "MODE=HEV_DNS_SNI") {
+            err.text = (if (running) "Фильтр DNS/SNI включён" else "Фильтр остановлен") +
+                "\n" + sst + "\nHTTPS-содержимое и встроенные рекламные блоки пока не фильтруются." +
+                (if (!running) "\n\nЖурнал:\n" + logText else "")
+        }
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
+        if (modeline == "MODE=HEV_DNS_SNI") stats.text = "Тестовая 2.0 • статистика текущего запуска"
         btn.setOnClickListener {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
