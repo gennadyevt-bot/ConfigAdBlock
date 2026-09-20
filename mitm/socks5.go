@@ -16,41 +16,41 @@ import (
 )
 
 var (
-	socksLn   net.Listener
-	socksMu   sync.Mutex
-	socksTCPN int64
-	socksUDPN int64
+	localSocksLn   net.Listener
+	localSocksMu   sync.Mutex
+	localSocksTCPN int64
+	localSocksUDPN int64
 )
 
 // SocksStats — строка для экрана статистики.
 func SocksStats() string {
-	return "socks5 tcp=" + strconv.FormatInt(atomic.LoadInt64(&socksTCPN), 10) +
-		" udp=" + strconv.FormatInt(atomic.LoadInt64(&socksUDPN), 10)
+	return "socks5 tcp=" + strconv.FormatInt(atomic.LoadInt64(&localSocksTCPN), 10) +
+		" udp=" + strconv.FormatInt(atomic.LoadInt64(&localSocksUDPN), 10)
 }
 
 // StartSocks5 поднимает локальный SOCKS5 (CONNECT + UDP ASSOCIATE).
 func StartSocks5(addr string) error {
-	socksMu.Lock()
-	defer socksMu.Unlock()
-	if socksLn != nil {
+	localSocksMu.Lock()
+	defer localSocksMu.Unlock()
+	if localSocksLn != nil {
 		return nil
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	socksLn = ln
+	localSocksLn = ln
 	go socksAcceptLoop(ln)
 	return nil
 }
 
 // StopSocks5 останавливает сервер.
 func StopSocks5() {
-	socksMu.Lock()
-	defer socksMu.Unlock()
-	if socksLn != nil {
-		_ = socksLn.Close()
-		socksLn = nil
+	localSocksMu.Lock()
+	defer localSocksMu.Unlock()
+	if localSocksLn != nil {
+		_ = localSocksLn.Close()
+		localSocksLn = nil
 	}
 }
 
@@ -98,7 +98,7 @@ func socksHandleConn(c net.Conn) {
 		if _, err := c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
 			return
 		}
-		atomic.AddInt64(&socksTCPN, 1)
+		atomic.AddInt64(&localSocksTCPN, 1)
 		_ = c.SetDeadline(time.Time{})
 		socksRelay(c, up)
 	case 3: // UDP ASSOCIATE
@@ -113,7 +113,7 @@ func socksHandleConn(c net.Conn) {
 		if _, err := c.Write(resp); err != nil {
 			return
 		}
-		atomic.AddInt64(&socksUDPN, 1)
+		atomic.AddInt64(&localSocksUDPN, 1)
 		_ = c.SetDeadline(time.Time{})
 		socksHandleUDP(c, uconn)
 	default:
