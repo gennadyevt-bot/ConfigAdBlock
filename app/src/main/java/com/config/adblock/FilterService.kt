@@ -587,7 +587,7 @@ class FilterService : VpnService() {
             saveErr("HEV: старт транспорта v2 (full-tunnel, без блокировки)")
             val sp = getSharedPreferences("stats", MODE_PRIVATE)
             try {
-                mitm.Mitm.setProtector(object : mitm.Mitm.Protector {
+                mitm.Mitm.setProtector(object : mitm.Protector {
                     override fun protect(fd: Long): Boolean {
                         return try { this@FilterService.protect(fd.toInt()) } catch (_: Exception) { false }
                     }
