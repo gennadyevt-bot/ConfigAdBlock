@@ -45,7 +45,13 @@ div[class*="__advertItem "],
 div[class^="desktop2--redesign-feed__"] div:has(> article[class*="--card-rtb__"]),
 div[aria-label="Лента Дзена"] div + article[class*="--card-rtb__"],
 div[class^="dzen-desktop--feed__itemWrap-"],
-div[class^="dzen-desktop--"][class*="__cardWrapper-"] ~ article:has([class*="__adBox-"]) { display: none !important; }
+div[class^="dzen-desktop--"][class*="__cardWrapper-"] ~ article:has([class*="__adBox-"]),
+div[class*="topContent"][class*="mobile__hasBanner"],
+div[class*="news"] > div[class*="_banner_"],
+.zenad-card-rtb,
+.news-mt-advert,
+.mg-advert > div[class*="loader"],
+div[class*="Advert_"] { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
@@ -152,7 +158,7 @@ func dzenInjectCSS(html string) string {
 	flowLog("DZEN_COSMETIC_INJECTED")
 	style := "<style data-cablock>\n" + dzenCSS + "</style>"
 	script := `<script data-cablock>(function(){
-var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"]';
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"]';
 function rmLabel(root){(root.querySelectorAll?root.querySelectorAll('*'):[]).forEach(function(e){if(e.children.length===0&&/^\s*реклама\s*$/i.test(e.textContent)){var n=e.closest('article')||e.parentElement;if(n)n.remove();}});}
 rmLabel(document);
 function rm(e){var n=e.closest('article')||e.parentElement;if(n){n.remove();}else{e.remove();}}
@@ -338,7 +344,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		}
 		if len(body) <= limit {
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath)
+			flowLog("DZEN_COSMETIC_RULESET=223")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=223")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
