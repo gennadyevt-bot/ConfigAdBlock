@@ -30,7 +30,6 @@ android {
     }
 }
 dependencies {
-    implementation(files("libs/hev-socks5-tunnel.aar"))
     implementation(files("libs/mitm.aar"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
