@@ -21,14 +21,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 )
 
 const dzenFakeIP = "10.0.0.3"
 
 // CSS из cosmetic_rules.txt (слой Kotlin держит полный парсер; для
 // delivery-слоя достаточно зафиксированных селекторов первого кейса).
-const dzenCSS = `[data-ad-type="direct"], [data-ad-type="banner"] { display: none !important; }
+const dzenCSS = `[data-ad-type="direct"],
+[data-ad-type="banner"],
+div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]),
+div[id^="ad-"][class*="__isStretched"],
+div[class*="MyTargetAdvert"],
+div[data-testid="bottom-ad"],
+div[class*="__advertItem "] { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
@@ -142,18 +147,22 @@ func dzenInjectCSS(html string) string {
 }
 
 // handleDzenMITM — mini-MITM ТОЛЬКО для dzen.ru.
-func handleDzenMITM(conn adapter.TCPConn, sni string) {
-	flowLog("DZEN_MITM sni=" + sni)
+// handleDzenMITM - собственный selective content-MITM для dzen (2.0.7/209).
+// Вызывается из SOCKS5 с УЖЕ прочитанным raw ClientHello - replay через
+// sniffConn. Fail-open: отказ от сертификата/любая TLS-ошибка -> sni в
+// bypassCache, следующий reconnect этого sni идёт DIRECT. Никакого goproxy.
+func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok bool) {
+	if isBypassed(sni, "") {
+		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
+		return false, false
+	}
+	flowLog("DZEN_MITM_BEGIN host=" + sni)
 	defer func() {
 		if r := recover(); r != nil {
-			flowLog(fmt.Sprintf("DZEN PANIC %v", r))
+			flowLog(fmt.Sprintf("DZEN_MITM_FAIL panic:%v", r))
 		}
 		_ = conn.Close()
 	}()
-	if !isDzenHost(sni) {
-		flowLog("DZEN_REJECT sni=" + sni)
-		return
-	}
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"http/1.1"},
@@ -161,17 +170,22 @@ func handleDzenMITM(conn adapter.TCPConn, sni string) {
 			return certForName(hi.ServerName)
 		},
 	}
-	tlsConn := tls.Server(conn, cfg)
+	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
-		flowLog("DZEN cliTLS FAIL " + err.Error())
-		return
+		// клиент не принял сертификат/обрыв -> bypass + следующий раз direct
+		cacheBypass(sni)
+		flowLog("DZEN_TLS_REJECT " + err.Error())
+		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
+		return true, false
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
+	flowLog("DZEN_TLS_OK sni=" + sni)
 
 	req, err := http.ReadRequest(bufio.NewReader(tlsConn))
 	if err != nil {
-		return
+		flowLog("DZEN_MITM_FAIL read-request:" + err.Error())
+		return true, false
 	}
 	upstreamHost := req.Host
 	if upstreamHost == "" {
@@ -179,20 +193,20 @@ func handleDzenMITM(conn adapter.TCPConn, sni string) {
 	}
 	ip, err := resolveRealIP(upstreamHost)
 	if err != nil {
-		flowLog("DZEN resolve FAIL " + err.Error())
-		return
+		flowLog("DZEN_MITM_FAIL resolve:" + err.Error())
+		return true, false
 	}
 	up, err := dialTCP(net.JoinHostPort(ip, "443"))
 	if err != nil {
-		flowLog("DZEN upDial FAIL " + err.Error())
-		return
+		flowLog("DZEN_MITM_FAIL updial:" + err.Error())
+		return true, false
 	}
 	upTLS := tls.Client(up, &tls.Config{ServerName: upstreamHost, MinVersion: tls.VersionTLS12})
 	_ = upTLS.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := upTLS.Handshake(); err != nil {
 		_ = up.Close()
-		flowLog("DZEN upTLS FAIL " + err.Error())
-		return
+		flowLog("DZEN_MITM_FAIL uptls:" + err.Error())
+		return true, false
 	}
 	_ = upTLS.SetDeadline(time.Time{})
 
@@ -203,23 +217,24 @@ func handleDzenMITM(conn adapter.TCPConn, sni string) {
 	outReq.RequestURI = ""
 	outReq.Header = req.Header.Clone()
 	outReq.Header.Del("Proxy-Connection")
-	outReq.Header.Del("Accept-Encoding") // иначе gzip-тело не проинжектить
+	outReq.Header.Del("Accept-Encoding") // иначе br/gzip-тело не проинжектить
 	if err := outReq.Write(upTLS); err != nil {
 		_ = up.Close()
-		return
+		flowLog("DZEN_MITM_FAIL reqwrite:" + err.Error())
+		return true, false
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upTLS), outReq)
 	if err != nil {
 		_ = up.Close()
-		flowLog("DZEN upRead FAIL " + err.Error())
-		return
+		flowLog("DZEN_MITM_FAIL upread:" + err.Error())
+		return true, false
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
 	_ = up.Close()
 	if err != nil {
-		flowLog("DZEN body FAIL " + err.Error())
-		return
+		flowLog("DZEN_MITM_FAIL body:" + err.Error())
+		return true, false
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(ct, "text/html") {
@@ -228,7 +243,7 @@ func handleDzenMITM(conn adapter.TCPConn, sni string) {
 		resp.Header.Del("Transfer-Encoding")
 		resp.TransferEncoding = nil
 		resp.ContentLength = int64(len(body))
-		flowLog("DZEN_INJECT bytes=" + strconv.Itoa(len(body)))
+		flowLog("DZEN_HTML_FILTERED bytes=" + strconv.Itoa(len(body)))
 	} else {
 		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 		resp.Header.Del("Transfer-Encoding")
@@ -236,7 +251,9 @@ func handleDzenMITM(conn adapter.TCPConn, sni string) {
 		resp.ContentLength = int64(len(body))
 	}
 	if err := resp.Write(tlsConn); err != nil {
-		return
+		flowLog("DZEN_MITM_FAIL respwrite:" + err.Error())
+		return true, false
 	}
-	flowLog("DZEN_OK ct=" + ct)
+	flowLog("DZEN_MITM_DONE host=" + sni + " ct=" + ct)
+	return true, true
 }

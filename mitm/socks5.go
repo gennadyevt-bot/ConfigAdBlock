@@ -132,11 +132,19 @@ func socksHandleConn(c net.Conn) {
 				atomic.AddInt64(&transportBlocked, 1)
 				return
 			}
-			// 2.0.6: selective content-MITM снова ВЫКЛЮЧЕН (207 ломала сеть).
-			// Код dispatch сохранён, вызов отключён - dzen идёт обычным
-			// direct relay после SNI-проверки.
+			// 2.0.7 (209): selective content-MITM на СОБСТВЕННОМ коде
+			// (certForName + sniffConn + bypassCache, без goproxy).
+			// Fail-open на каждом этапе; TLS-отказ -> bypass -> direct.
 			if isDzenHost(sni) {
-				flowLog("DZEN_CONTENT_MITM=OFF_DIRECT sni=" + sni)
+				if handled, ok := handleDzenMITM(c, sni, raw); handled {
+					if ok {
+						atomic.AddInt64(&contentMitmN, 1)
+					} else {
+						atomic.AddInt64(&contentMitmErrN, 1)
+					}
+					return
+				}
+				// handled=false -> bypass: обычный direct ниже
 			}
 			if len(raw) > 0 {
 				if _, err := up.Write(raw); err != nil {
