@@ -102,8 +102,10 @@ class FilterService : VpnService() {
         try { mitm.Mitm.stopTunnel() } catch (_: Exception) {}
         try { mitm.Mitm.stopProxy() } catch (_: Exception) {}
         try { tun?.close() } catch (_: Exception) {}
+        // transport-core-v2: процесс НЕ убиваем — при ошибке сервис должен
+        // остановиться нормально, MainActivity и приложение живут,
+        // ошибка остаётся видна на экране.
         super.onDestroy()
-        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun buildNotification(text: String): Notification {
@@ -584,7 +586,7 @@ class FilterService : VpnService() {
     // ЭТАП 1: чистый full-tunnel, НИКАКОЙ блокировки/фильтрации.
     private fun runHevTransport() {
         try {
-            saveErr("HEV: старт транспорта v2 (full-tunnel, без блокировки)")
+            saveErr("HEV_ENTER v2 full-tunnel no-blocking")
             val sp = getSharedPreferences("stats", MODE_PRIVATE)
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
@@ -595,7 +597,7 @@ class FilterService : VpnService() {
             } catch (e: Exception) { saveErr("HEV protector FAIL " + e.message) }
             try {
                 mitm.Mitm.startSocks5("127.0.0.1:1080")
-                saveErr("HEV socks5 127.0.0.1:1080 ok")
+                saveErr("HEV_SOCKS_START 127.0.0.1:1080")
             } catch (e: Exception) {
                 saveErr("HEV socks5 FAIL " + e.message)
                 return
@@ -632,7 +634,7 @@ class FilterService : VpnService() {
             }
             if (pfd == null) { saveErr("HEV: слот VPN недоступен"); return }
             tun = pfd
-            saveErr("HEV VPN_ESTABLISHED")
+            saveErr("HEV_VPN_ESTABLISHED")
 
             val cfg = File(filesDir, "hev-socks5-tunnel.yml")
             cfg.writeText("tunnel:\n  name: tun0\n  mtu: 1500\n  ipv4: 10.0.0.2\n" +
@@ -642,7 +644,7 @@ class FilterService : VpnService() {
             val ok: Boolean = try {
                 hev.htproxy.TProxyService.start(cfg.absolutePath, pfd.fd)
             } catch (t: Throwable) {
-                saveErr("HEV_LOAD_FAIL " + t.javaClass.simpleName + ": " + (t.message ?: "?"))
+                saveErr("HEV_FATAL LOAD " + t.javaClass.simpleName + ": " + (t.message ?: "?"))
                 false
             }
             saveErr("HEV_LOAD_OK")
@@ -653,7 +655,7 @@ class FilterService : VpnService() {
                 sp.edit().putString("stackstats", mitm.Mitm.socksStats()).apply()
             }
         } catch (t: Throwable) {
-            saveErr("HEV FATAL: " + t.javaClass.simpleName + ": " + (t.message ?: "?"))
+            saveErr("HEV_FATAL " + t.javaClass.simpleName + ": " + (t.message ?: "?"))
         } finally {
             saveErr("HEV стоп")
             try { hev.htproxy.TProxyService.stop() } catch (_: Exception) {}

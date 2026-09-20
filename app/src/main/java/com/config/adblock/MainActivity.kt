@@ -272,11 +272,12 @@ class MainActivity : AppCompatActivity() {
         // Журнал: пока сервис жив — текущий поток FlowLog; после STOP —
         // сохранённый снапшот последней сессии (GPT: лог не должен
         // исчезать раньше анализа).
-        val svcRunning = FilterService.isRunning
-        var logText = prefs.getString("log", "") ?: ""
-        if (!svcRunning) {
-            val lastLog = prefs.getString("last_log", "") ?: ""
-            if (lastLog.isNotEmpty()) logText = lastLog
+        // transport-core-v2: текущий log НИКОГДА не заменяем старым last_log —
+        // иначе после неудачного запуска реальная ошибка теряется.
+        var logText = "--- CURRENT LOG ---\n" + (prefs.getString("log", "") ?: "")
+        val lastLog = prefs.getString("last_log", "") ?: ""
+        if (lastLog.isNotEmpty()) {
+            logText = logText + "\n\n--- PREVIOUS SESSION ---\n" + lastLog
         }
         // 0.5.73 (GPT): видимый список последних SNI с вердиктами
         val sniLog = prefs.getString("snilog", "") ?: ""
