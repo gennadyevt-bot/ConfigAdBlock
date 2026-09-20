@@ -805,6 +805,14 @@ var (
 	bypassCache = make(map[string]bool)
 )
 
+// unBypassHost снимает bypass-запись для sni (218: успешный TLS снимает
+// transient bypass, выставленный старыми версиями/ошибками).
+func unBypassHost(key string) {
+	bypassMu.Lock()
+	delete(bypassCache, key)
+	bypassMu.Unlock()
+}
+
 func cacheBypass(key string) {
 	bypassMu.Lock()
 	bypassCache[key] = true

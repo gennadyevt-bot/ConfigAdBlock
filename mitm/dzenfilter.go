@@ -193,10 +193,9 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		if r := recover(); r != nil {
 			flowLog(fmt.Sprintf("DZEN_MITM_FAIL panic:%v", r))
 		}
-		// Once TLS bytes were sent, direct relay is only safe on reconnect.
-		if !ok {
-			cacheBypass(sni)
-		}
+		// 218: БЕЗ blanket cacheBypass - ошибка одного соединения
+		// (timeout/EOF/resolve/upstream) не отключает фильтр для sni.
+		// В bypass попадаем ТОЛЬКО при реальном TLS trust rejection.
 		_ = conn.Close()
 	}()
 	cfg := &tls.Config{
@@ -207,46 +206,55 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
-		// клиент не принял сертификат/обрыв -> bypass + следующий раз direct
-		cacheBypass(sni)
-		event := "DZEN_TLS_FAIL"
-		if strings.Contains(err.Error(), "remote error: tls:") {
-			event = "DZEN_TLS_REJECT"
+		// 218: bypass ТОЛЬКО при реальном отказе браузера от сертификата.
+		// timeout/EOF/abort после TLS-слёта - обычная ошибка соединения,
+		// reconnect должен снова попытать MITM.
+		es := err.Error()
+		certReject := strings.Contains(es, "unknown certificate") ||
+			strings.Contains(es, "bad certificate") ||
+			strings.Contains(es, "certificate required") ||
+			strings.Contains(es, "certificate verify failed")
+		if certReject {
+			cacheBypass(sni)
+			flowLog("DZEN_TLS_REJECT host=" + sni + " err=" + es)
+			flowLog("DZEN_BYPASS_CACHE_SET sni=" + sni + " reason=tls_reject")
+		} else {
+			flowLog("DZEN_TLS_FAIL host=" + sni + " err=" + es)
 		}
-		flowLog(event + " host=" + sni + " err=" + err.Error())
-		flowLog("DZEN_BYPASS_DIRECT sni=" + sni)
 		return true, false
 	}
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	flowLog("DZEN_TLS_OK sni=" + sni)
+	// 218: успешный TLS снимает возможный старый transient bypass этого sni
+	unBypassHost(sni)
 
 	req, err := http.ReadRequest(bufio.NewReader(tlsConn))
 	if err != nil {
-		flowLog("DZEN_MITM_FAIL read-request:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=read-request err=" + err.Error())
 		return true, false
 	}
 	defer req.Body.Close()
 	// Route only the selective host authenticated by the client SNI.
 	upstreamHost := sni
 	if req.Host != "" && !strings.EqualFold(req.Host, sni) && !strings.EqualFold(req.Host, net.JoinHostPort(sni, "443")) {
-		flowLog("DZEN_MITM_FAIL host-mismatch")
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=host-mismatch")
 		return true, false
 	}
 	ip, err := resolveRealIP(upstreamHost)
 	if err != nil {
-		flowLog("DZEN_MITM_FAIL resolve:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=resolve err=" + err.Error())
 		return true, false
 	}
 	up, err := dialTCP(net.JoinHostPort(ip, "443"))
 	if err != nil {
-		flowLog("DZEN_MITM_FAIL updial:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=updial err=" + err.Error())
 		return true, false
 	}
 	defer up.Close()
 	upTLS := tls.Client(up, &tls.Config{ServerName: upstreamHost, MinVersion: tls.VersionTLS12})
 	_ = upTLS.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := upTLS.Handshake(); err != nil {
-		flowLog("DZEN_MITM_FAIL uptls:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=uptls err=" + err.Error())
 		return true, false
 	}
 	_ = upTLS.SetDeadline(time.Now().Add(30 * time.Second))
@@ -262,12 +270,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	outReq.Header.Del("Proxy-Connection")
 	outReq.Header.Del("Accept-Encoding") // иначе br/gzip-тело не проинжектить
 	if err := outReq.Write(upTLS); err != nil {
-		flowLog("DZEN_MITM_FAIL reqwrite:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " reqwrite:" + err.Error())
 		return true, false
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upTLS), outReq)
 	if err != nil {
-		flowLog("DZEN_MITM_FAIL upread:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " upread:" + err.Error())
 		return true, false
 	}
 	flowLog(fmt.Sprintf("DZEN_RESPONSE host=%s method=%s path=%s status=%s ct=%s len=%d",
@@ -276,11 +284,11 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	defer resp.Body.Close()
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if err := filterDzenResponse(resp, req.URL.Path); err != nil {
-		flowLog("DZEN_MITM_FAIL body:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " body:" + err.Error())
 		return true, false
 	}
 	if err := resp.Write(tlsConn); err != nil {
-		flowLog("DZEN_MITM_FAIL respwrite:" + err.Error())
+		flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " respwrite:" + err.Error())
 		return true, false
 	}
 	flowLog("DZEN_MITM_DONE host=" + sni + " ct=" + ct)
