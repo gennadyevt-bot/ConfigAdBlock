@@ -164,12 +164,19 @@ func dzenInjectCSS(html string) string {
 	style := "<style data-cablock>\n" + dzenCSS + "</style>"
 	script := `<script data-cablock>(function(){
 var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"]';
-var diagSent=0;
+var diagSent=0,iframeSent=0,iframeSeen={},shadowSeen=[],shadowCount=0;
 function sendDiag(sig){
-  if(diagSent>=3)return;
+  if(diagSent>=6)return;
   if(!sig||sig.length>1000)return;
   diagSent++;
   try{fetch('/__configadblock_diag?d='+encodeURIComponent(sig),{credentials:'omit',cache:'no-store'}).catch(function(){});}catch(_){}
+}
+function sendIframe(host){
+  if(iframeSent>=10)return;
+  if(!host||host.length>80)return;
+  if(iframeSeen[host])return;
+  iframeSeen[host]=1;iframeSent++;
+  try{fetch('/__configadblock_diag?d='+encodeURIComponent('IFRAME host='+host),{credentials:'omit',cache:'no-store'}).catch(function(){});}catch(_){}
 }
 function sigOf(e){
   var parts=[],n=e;
@@ -190,22 +197,29 @@ function rmSel(root){
   root.querySelectorAll(sels).forEach(function(e){e.remove();});
 }
 function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
+var ADLABEL=/^\s*Реклама(?:\s+\d+\+)?\s*$/i;
 function rmLabel(root){
   if(!root.querySelectorAll)return;
   var all=(root.matches&&root.matches('*'))?[root]:[];
   root.querySelectorAll('*').forEach(function(e){all.push(e);});
   for(var k=0;k<all.length;k++){
     var e=all[k];
-    if(!/^\s*Реклама\s*$/i.test(e.textContent||''))continue;
+    if(!ADLABEL.test(e.textContent||''))continue;
     sendDiag(sigOf(e));
-    var n=e;
+    var n=e,appHit=false;
     for(var up=0;up<8&&n&&n.parentElement;up++){
       n=n.parentElement;
       var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
       var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
       var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
+      // 226: app-install/native карточка: метка + Рейтинг и отзывы + О приложении
+      var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&hasT(n,'Реклама');
+      if(app&&!appHit){appHit=true;sendDiag(sigOf(n));}
       if(triple)sendDiag(sigOf(n));
-      if(cls||triple){n.remove();break;}
+      if(cls||triple||app){
+        if(app){try{fetch('/__configadblock_diag?d='+encodeURIComponent('APPAD'),{credentials:'omit'}).catch(function(){});}catch(_){}}
+        n.remove();break;
+      }
     }
   }
 }
@@ -219,7 +233,40 @@ function emptyAdWrap(root){
     d.remove();
   });
 }
-function scan(root){try{rmSel(root);rmLabel(root);emptyAdWrap(root);}catch(_){}}
+function scanIframes(root){
+  if(!root.querySelectorAll)return;
+  root.querySelectorAll('iframe').forEach(function(f){
+    var h='';
+    try{var u=new URL(f.src||'',location.href);h=u.hostname||'';}catch(_){}
+    if(h)sendIframe(h);
+    var same=false;
+    try{var doc=f.contentDocument;if(doc&&doc.documentElement){same=true;scan(doc.documentElement);}}catch(_){}
+  });
+}
+function scanShadows(root){
+  if(!root.querySelectorAll)return;
+  root.querySelectorAll('*').forEach(function(e){
+    if(shadowCount>=20)return;
+    var sr=null;
+    try{sr=e.shadowRoot;}catch(_){}
+    if(sr&&sr.documentElement!==undefined||sr){
+      var key=sigOf(e);
+      if(shadowSeen.indexOf(key)<0){
+        shadowSeen.push(key);shadowCount++;
+        scan(sr);
+        try{
+          new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);});});}).observe(sr,{childList:true,subtree:true});
+        }catch(_){}
+      }
+    }
+  });
+}
+function scan(root){
+  try{
+    rmSel(root);rmLabel(root);emptyAdWrap(root);
+    scanIframes(root);scanShadows(root);
+  }catch(_){}
+}
 scan(document);
 [0,250,750,1500,3000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -326,7 +373,11 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			if len(q) > 1000 {
 				q = q[:1000]
 			}
-			if q != "" {
+			if strings.HasPrefix(q, "IFRAME host=") {
+				flowLog("DZEN_IFRAME_DIAG host=" + strings.TrimPrefix(q, "IFRAME host="))
+			} else if q == "APPAD" {
+				flowLog("DZEN_APP_AD_REMOVED")
+			} else if q != "" {
 				flowLog("DZEN_DOM_DIAG " + q)
 			}
 			dr := &http.Response{StatusCode: 204, Status: "204 No Content", Proto: "HTTP/1.1",
@@ -422,8 +473,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 		}
 		if len(body) <= limit {
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=225")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=225")
+			flowLog("DZEN_COSMETIC_RULESET=226")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=226")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
