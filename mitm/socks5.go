@@ -183,9 +183,8 @@ func socksHandleUDP(ctrl net.Conn, u *net.UDPConn) {
 		one := make([]byte, 1)
 		_, _ = ctrl.Read(one)
 		_ = u.Close()
-		for _, up := range upstreams {
-			_ = up.Close()
-		}
+		// Wake the owner loop; only that loop may access upstreams.
+		// Its deferred cleanup closes all outbound sockets.
 	}()
 	buf := make([]byte, 64*1024)
 	for {
@@ -208,6 +207,7 @@ func socksHandleUDP(ctrl net.Conn, u *net.UDPConn) {
 			if err != nil {
 				continue
 			}
+			up = conn
 			upstreams[key] = conn
 			go socksPumpUDPDown(u, sender, conn, host, port)
 		}
