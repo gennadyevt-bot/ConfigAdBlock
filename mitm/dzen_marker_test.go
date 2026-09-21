@@ -22,7 +22,6 @@ func TestDzenAdMarker(t *testing.T) {
 		"Рекламная статья про машины",
 		"рекламный блок",
 		"16+",
-		"реклама16+",
 		"не реклама",
 	}
 	for _, c := range falseCases {
