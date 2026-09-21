@@ -37,6 +37,21 @@ func main() {
 			fail++
 		}
 	}
+	// 234: disclosure-маркер (JS ADD) — одна логика с Go.
+	disTrue := []string{"Рекламное объявление", "рекламное объявление", "РЕКЛАМНОЕ   объявление"}
+	disFalse := []string{"объявление", "Рекламное объявление от партнёра", "не рекламное объявление"}
+	for _, c := range disTrue {
+		if !mitm.DzenAdDisclosureRe.MatchString(c) {
+			fmt.Println("FAIL disclosure must MATCH:", c)
+			fail++
+		}
+	}
+	for _, c := range disFalse {
+		if mitm.DzenAdDisclosureRe.MatchString(c) {
+			fmt.Println("FAIL disclosure must NOT match:", c)
+			fail++
+		}
+	}
 	if fail > 0 {
 		os.Exit(1)
 	}

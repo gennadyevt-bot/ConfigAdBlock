@@ -171,15 +171,23 @@ var metaCSPRe *regexp.Regexp
 // и те же строки.
 var DzenAdMarkerRe = regexp.MustCompile(`(?i)^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$`)
 
+// DzenAdDisclosureRe — сильный disclosure-маркер (234). JS ADD синхронизирован
+// selfcheck'ом при сборке.
+var DzenAdDisclosureRe = regexp.MustCompile(`(?i)^рекламное\s+объявление$`)
+
 var dzenCosmeticJS = `(function(){
 var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"],div[class^="dzen-mobile__bannerMain-"]';
 var ADL=/^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$/i;
+// 234: сильный disclosure-маркер. JS ADD и Go DzenAdDisclosureRe синхронизированы
+// selfcheck'ом при сборке.
+var ADD=/^рекламное\s+объявление$/i;
+function isAdMarker(v){return ADL.test(v)||ADD.test(v);}
 var diagSent=0,iframeSent=0,iframeSeen={},shadowSeen=[],shadowCount=0;
 function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -205,6 +213,73 @@ function rmSel(root){
 }
 function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
 // 232: slides могут быть grandchildren (wrapper > track > slide).
+// 234: combo detection — добавленный subtree содержит disclosure+скрыть+пожаловаться
+// (textContent объединяет разбитые по span строки). Только маленькие subtree.
+function comboDisclosure(nd){
+  try{
+    if(!nd||nd.nodeType!==1)return;
+    var t=nd.textContent||'';
+    if(t.length<4000&&t.indexOf('Рекламное объявление')>=0&&t.indexOf('Скрыть объявление')>=0&&t.indexOf('Пожаловаться')>=0){
+      sendDiag('DISCLOSURE_COMBO len='+t.length);
+      handleDisclosure(nd,'рекламное объявление');
+    }
+  }catch(_){}
+}
+// 234: STRONG_AD_DISCLOSURE. "Рекламное объявление" + меню рядом (>=2 фраз) —
+// якорь для удаления ВСЕЙ карусели, а не только панели disclosure.
+// Wrapper: самый внешний ancestor (до 12), который содержит disclosure-текст,
+// pager>=2, largeMedia>=1 или media, height<=80% vh, не захватывает next post.
+function handleDisclosure(el,mt){
+  if(!el)return;
+  sendDiag('DISCLOSURE='+mt+' :: '+sigOf(el,6));
+  var phrases=['Скрыть объявление','Пожаловаться','О рекламодателе','Реклама на Яндексе'];
+  var host=null,hits=0,n=el;
+  for(var p=0;p<12&&n&&n.parentElement;p++){
+    n=n.parentElement;
+    var t=(n.textContent||'');
+    var c=0;
+    for(var q=0;q<phrases.length;q++){if(t.indexOf(phrases[q])>=0)c++;}
+    if(c>=2){host=n;hits=c;break;}
+  }
+  if(hits>=2)sendDiag('AD_DISCLOSURE_FOUND phrases='+hits);
+  var anchor=host||el;
+  if(!host){
+    try{
+      var t2=(anchor.textContent||'');
+      if(t2.indexOf('Рекламное объявление')>=0&&t2.indexOf('Скрыть объявление')>=0&&t2.indexOf('Пожаловаться')>=0){hits=3;sendDiag('AD_DISCLOSURE_FOUND combo=1');}
+    }catch(_){}
+  }
+  var chain=[],m=anchor;
+  for(var up=0;up<12&&m&&m.parentElement;up++){m=m.parentElement;chain.push(m);}
+  var car=null,ciInfo=null;
+  for(var i=0;i<chain.length;i++){
+    var a=chain[i];
+    try{if((a.textContent||'').indexOf('Рекламное объявление')<0)continue;}catch(_){continue;}
+    var pg=findPager(a);
+    if(!pg.found||pg.count<2)continue;
+    var lm=countLargeMedia(a);
+    var media=0;
+    try{media=a.querySelectorAll('img,video,[class*="card-rtb"],[class*="adBox"]').length;}catch(_){}
+    if(lm<1&&media<1)continue;
+    var r=a.getBoundingClientRect();
+    if(r&&r.height>window.innerHeight*0.8)continue;
+    var news=0;
+    try{news=a.querySelectorAll('article,[role="article"]').length;}catch(_){}
+    if(news>1)continue;
+    ciInfo='pager='+pg.count+' largeMedia='+lm+' rect='+(r?Math.round(r.width)+'x'+Math.round(r.height):'?');
+    sendDiag('DISCLOSURE_CANDIDATE '+ciInfo+' :: '+sigOf(a,4));
+    car=a;
+  }
+  if(car){
+    marker('DISCCAR');
+    car.remove();
+    marker('DISCCAR_RM');
+    return;
+  }
+  // disclosure есть, карусель по пагеру/media не подтвердилась —
+  // отрабатываем как обычный ad marker
+  try{handleMarker(anchor,mt);}catch(_){}
+}
 // 233: геометрический pager — 2-6 точек 4..24px, в одну горизонтальную линию,
 // близко друг к другу, родитель существенно меньше media block.
 // Без class="dot". Scan ограничен первыми 400 candidates внутри root.
@@ -391,7 +466,13 @@ function eachText(root,cb){
 function scanText(root){
   eachText(root,function(tn){
     var v=norm(tn.nodeValue);
-    if(!v||!ADL.test(v))return;
+    if(!v)return;
+    if(ADD.test(v)){
+      try{beacon('DISCLOSURE '+v.replace(/\s+/g,'_').slice(0,20));}catch(_){}
+      try{handleDisclosure(tn.parentElement,v);}catch(_){}
+      return;
+    }
+    if(!ADL.test(v))return;
     try{beacon('ADMARKER '+v.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20));}catch(_){}
     try{handleMarker(tn.parentElement,v);}catch(_){}
   });
@@ -427,7 +508,7 @@ function scanShadows(root){
         shadowSeen.push(key);shadowCount++;
         scan(sr);
         try{
-          var sobs=new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);else if(nd.nodeType===3&&ADL.test(norm(nd.nodeValue)))handleMarker(nd.parentElement,norm(nd.nodeValue));});});});
+          var sobs=new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1){scan(nd);comboDisclosure(nd);}else if(nd.nodeType===3){var sv=norm(nd.nodeValue);if(ADD.test(sv))handleDisclosure(nd.parentElement,sv);else if(ADL.test(sv))handleMarker(nd.parentElement,sv);}});});});
           sobs.observe(sr,{childList:true,subtree:true});
         }catch(_){}
       }
@@ -436,17 +517,17 @@ function scanShadows(root){
 }
 function scan(root){
   try{
-    if(root.nodeType===3){var v=norm(root.nodeValue);if(ADL.test(v))handleMarker(root.parentElement,v);return;}
+    if(root.nodeType===3){var v=norm(root.nodeValue);if(ADD.test(v))handleDisclosure(root.parentElement,v);else if(ADL.test(v))handleMarker(root.parentElement,v);return;}
     rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE233');
+marker('JSALIVE234');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
   ms.forEach(function(m){
     if(!m.addedNodes)return;
-    m.addedNodes.forEach(function(nd){scan(nd);});
+    m.addedNodes.forEach(function(nd){scan(nd);comboDisclosure(nd);});
   });
 }).observe(document.documentElement,{childList:true,subtree:true});
 })();`
@@ -551,12 +632,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=233")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=234")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=233")
+				flowLog("DZEN_JS_BODY_OK ruleset=234")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -567,7 +648,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=233")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=234")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -585,15 +666,17 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=233")
+				flowLog("DZEN_JS_ALIVE ruleset=234")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=233")
+				flowLog("DZEN_JS_ALIVE ruleset=234")
 			case q == "JSALIVE230":
-				flowLog("DZEN_JS_ALIVE ruleset=233")
+				flowLog("DZEN_JS_ALIVE ruleset=234")
 			case q == "JSALIVE231":
-				flowLog("DZEN_JS_ALIVE ruleset=233")
+				flowLog("DZEN_JS_ALIVE ruleset=234")
 			case q == "JSALIVE233":
-				flowLog("DZEN_JS_ALIVE ruleset=233")
+				flowLog("DZEN_JS_ALIVE ruleset=234")
+			case q == "JSALIVE234":
+				flowLog("DZEN_JS_ALIVE ruleset=234")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -610,6 +693,14 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_CAROUSEL_WRAPPER_REMOVED")
 			case q == "ORPHANCAR":
 				flowLog("DZEN_ORPHAN_CAROUSEL_REMOVED")
+			case strings.HasPrefix(q, "DISCLOSURE_CANDIDATE "):
+				flowLog("DZEN_DISCLOSURE_CANDIDATE " + strings.TrimPrefix(q, "DISCLOSURE_CANDIDATE "))
+			case q == "AD_DISCLOSURE_FOUND":
+				flowLog("DZEN_AD_DISCLOSURE_FOUND")
+			case q == "DISCCAR":
+				flowLog("DZEN_AD_DISCLOSURE_FOUND")
+			case q == "DISCCAR_RM":
+				flowLog("DZEN_DISCLOSURE_CAROUSEL_REMOVED")
 			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
 				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
@@ -718,8 +809,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=233")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=233")
+			flowLog("DZEN_COSMETIC_RULESET=234")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=234")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))

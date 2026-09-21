@@ -683,7 +683,8 @@ class FilterService : VpnService() {
                                 t.contains("DZEN_TOP_BANNER") || t.contains("DZEN_APP_AD_REMOVED") ||
                                 t.contains("DZEN_JS_FILE_REQUEST") || t.contains("DZEN_CSS_FILE_REQUEST") ||
                                 t.contains("DZEN_META_CSP") || t.contains("DZEN_JS_BODY") ||
-                                t.contains("DZEN_AD_MARKER_MATCH")) {
+                                t.contains("DZEN_AD_MARKER_MATCH") ||
+                                t.contains("DZEN_AD_DISCLOSURE") || t.contains("DZEN_DISCLOSURE")) {
                                 sb.append(t).append("\n")
                             }
                         }
