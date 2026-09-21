@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -160,17 +161,16 @@ func firstAFromDNS(ans []byte) (string, error) {
 	return "", fmt.Errorf("no A record")
 }
 
-func dzenInjectCSS(html string) string {
-	style := "<style data-cablock>\n" + dzenCSS + "</style>"
-	script := `<script data-cablock>(function(){
+// metaCSPRe - ленивая инициализация regex для meta CSP (229)
+var metaCSPRe *regexp.Regexp
+
+var dzenCosmeticJS = `<script data-cablock>(function(){
 var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"]';
 var ADL=/^(?:реклама|соцреклама)(?: \d+\+)?$/i;
 var diagSent=0,iframeSent=0,iframeSeen={},shadowSeen=[],shadowCount=0;
 function beacon(data){
-  try{
-    if(navigator.sendBeacon){navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]));return;}
-  }catch(_){}
-  try{fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',credentials:'omit',cache:'no-store'}).catch(function(){});}catch(_){}
+  try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
+  try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
 function sendDiag(sig){if(diagSent>=8||!sig||sig.length>1000)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
@@ -299,7 +299,7 @@ function scan(root){
     rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE228');
+marker('JSALIVE229');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -309,12 +309,20 @@ new MutationObserver(function(ms){
   });
 }).observe(document.documentElement,{childList:true,subtree:true});
 })();</script>`
+
+// dzenInjectCSS внедряет external script/css (229): <script src="/__configadblock.js">
+// и <link href="/__configadblock.css"> обслуживаются ЛОКАЛЬНО нашим MITM -
+// inline JS убран, чтобы не путать диагностику доставки.
+func dzenInjectCSS(html string) string {
+	style := "<style data-cablock>\n" + dzenCSS + "</style>"
+	assets := "<link rel=\"stylesheet\" href=\"/__configadblock.css\">\n" +
+		"<script defer src=\"/__configadblock.js\"></script>"
 	low := strings.ToLower(html)
 	idx := strings.Index(low, "</head>")
 	if idx > 0 {
-		return html[:idx] + style + "\n" + script + "\n" + html[idx:]
+		return html[:idx] + style + "\n" + assets + "\n" + html[idx:]
 	}
-	return style + "\n" + script + "\n" + html
+	return style + "\n" + assets + "\n" + html
 }
 
 // handleDzenMITM — mini-MITM ТОЛЬКО для dzen.ru.
@@ -400,6 +408,29 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		reqs++
 		flowLog(fmt.Sprintf("DZEN_REQ n=%d method=%s path=%s", reqs, req.Method, req.URL.Path))
 
+		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
+		if req.URL.Path == "/__configadblock.js" {
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=229")
+			jb := []byte(dzenCosmeticJS)
+			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
+				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
+				Body: io.NopCloser(bytes.NewReader(jb)), ContentLength: int64(len(jb)), Close: false, Request: req}
+			jr.Header.Set("Content-Type", "application/javascript; charset=utf-8")
+			jr.Header.Set("Cache-Control", "no-store")
+			_ = jr.Write(tlsConn)
+			continue
+		}
+		if req.URL.Path == "/__configadblock.css" {
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=229")
+			cb := []byte(dzenCSS)
+			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
+				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
+				Body: io.NopCloser(bytes.NewReader(cb)), ContentLength: int64(len(cb)), Close: false, Request: req}
+			cr.Header.Set("Content-Type", "text/css; charset=utf-8")
+			cr.Header.Set("Cache-Control", "no-store")
+			_ = cr.Write(tlsConn)
+			continue
+		}
 		// 225: локальный diag-endpoint - DOM-сигнатуры не уходят на dzen.ru
 		if req.URL.Path == "/__configadblock_diag" {
 			q := req.URL.Query().Get("d")
@@ -408,7 +439,9 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=228")
+				flowLog("DZEN_JS_ALIVE ruleset=229")
+			case q == "JSALIVE229":
+				flowLog("DZEN_JS_ALIVE ruleset=229")
 			case strings.HasPrefix(q, "IFRAME host="):
 				flowLog("DZEN_IFRAME_DIAG host=" + strings.TrimPrefix(q, "IFRAME host="))
 			case q == "APPAD":
@@ -514,9 +547,17 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 			return err
 		}
 		if len(body) <= limit {
+			if metaCSPRe == nil {
+				metaCSPRe = regexp.MustCompile(`(?i)<meta[^>]+http-equiv=["']content-security-policy["'][^>]*>`)
+			}
+			if metaCSPRe.Match(body) {
+				flowLog("DZEN_META_CSP_FOUND")
+				body = metaCSPRe.ReplaceAll(body, nil)
+				flowLog("DZEN_META_CSP_REMOVED")
+			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=228")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=228")
+			flowLog("DZEN_COSMETIC_RULESET=229")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=229")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))

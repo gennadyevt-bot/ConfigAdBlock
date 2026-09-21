@@ -680,7 +680,9 @@ class FilterService : VpnService() {
                             val t = line.trim()
                             if (t.contains("DZEN_DOM_DIAG") || t.contains("DZEN_JS_ALIVE") ||
                                 t.contains("DZEN_IFRAME_DIAG") || t.contains("DZEN_CAROUSEL") ||
-                                t.contains("DZEN_TOP_BANNER") || t.contains("DZEN_APP_AD_REMOVED")) {
+                                t.contains("DZEN_TOP_BANNER") || t.contains("DZEN_APP_AD_REMOVED") ||
+                                t.contains("DZEN_JS_FILE_REQUEST") || t.contains("DZEN_CSS_FILE_REQUEST") ||
+                                t.contains("DZEN_META_CSP")) {
                                 sb.append(t).append("\n")
                             }
                         }
