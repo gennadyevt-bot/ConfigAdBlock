@@ -1357,4 +1357,8 @@ func dzenSuspectWalk(node interface{}, reqPath, jpath string, depth int) {
 			dzenSuspectWalk(t[0], reqPath, jpath+"[0]", depth+1)
 		} else {
 			for i, el := range t {
-				dzenSuspectWalk(e
+				dzenSuspectWalk(el, reqPath, fmt.Sprintf("%s[%d]", jpath, i), depth+1)
+			}
+		}
+	}
+}
