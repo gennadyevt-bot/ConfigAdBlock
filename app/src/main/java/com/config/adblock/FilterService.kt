@@ -684,7 +684,8 @@ class FilterService : VpnService() {
                                 t.contains("DZEN_JS_FILE_REQUEST") || t.contains("DZEN_CSS_FILE_REQUEST") ||
                                 t.contains("DZEN_META_CSP") || t.contains("DZEN_JS_BODY") ||
                                 t.contains("DZEN_AD_MARKER_MATCH") ||
-                                t.contains("DZEN_AD_DISCLOSURE") || t.contains("DZEN_DISCLOSURE")) {
+                                t.contains("DZEN_AD_DISCLOSURE") || t.contains("DZEN_DISCLOSURE") ||
+                                t.contains("DZEN_FEED_AD_RULE")) {
                                 sb.append(t).append("\n")
                             }
                         }

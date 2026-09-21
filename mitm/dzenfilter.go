@@ -59,7 +59,8 @@ div[class^="BrandingAdvert"],
 div[class^="dzen-desktop--banner-"],
 div[class*="-corner-banner__"],
 div[class^="content--dzen-pro-"],
-div[class^="dzen-mobile__bannerMain-"] { display: none !important; }
+div[class^="dzen-mobile__bannerMain-"],
+.feed__item article[class*="_is"]:not([class*="__card"]):not(:has(> div.short-video-carousel-view)) { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
@@ -176,7 +177,7 @@ var DzenAdMarkerRe = regexp.MustCompile(`(?i)^(?:реклама|соцрекла
 var DzenAdDisclosureRe = regexp.MustCompile(`(?i)^рекламное\s+объявление$`)
 
 var dzenCosmeticJS = `(function(){
-var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"],div[class^="dzen-mobile__bannerMain-"]';
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"],div[class^="dzen-mobile__bannerMain-"],.feed__item article[class*="_is"]:not([class*="__card"]):not(:has(> div.short-video-carousel-view))';
 var ADL=/^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$/i;
 // 234: сильный disclosure-маркер. JS ADD и Go DzenAdDisclosureRe синхронизированы
 // selfcheck'ом при сборке.
@@ -187,7 +188,7 @@ function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -515,13 +516,38 @@ function scanShadows(root){
     }
   });
 }
+// 235: точный публичный AdGuard feed-ad selector для dzen.ru.
+// Исключение :not(:has(> div.short-video-carousel-view)) ОБЯЗАТЕЛЬНО —
+// защищает обычные short-video карусели. Не упрощать!
+var FEEDAD='.feed__item article[class*="_is"]:not([class*="__card"]):not(:has(> div.short-video-carousel-view))';
+// Диагностический поиск ДО удаления: MATCH -> remove -> REMOVED.
+// Хешированные class names НЕ используем — только стабильная структура .feed__item.
+function scanFeedAds(root){
+  try{
+    if(!root||!root.querySelectorAll)return;
+    var cands=[];
+    try{if(root.matches&&root.matches(FEEDAD))cands.push(root);}catch(_){}
+    var all=root.querySelectorAll(FEEDAD);
+    for(var i=0;i<all.length;i++)cands.push(all[i]);
+    for(var k=0;k<cands.length;k++){
+      var a=cands[k];
+      if(!a||!a.isConnected)continue;
+      var r=a.getBoundingClientRect();
+      var pg=findPager(a.parentElement||a);
+      var lm=countLargeMedia(a);
+      sendDiag('FEED_AD_RULE_MATCH rect='+Math.round(r.width)+'x'+Math.round(r.height)+' hasPager='+pg.found+' largeMedia='+lm+' :: '+sigOf(a,3));
+      a.remove();
+      marker('FEEDADRM');
+    }
+  }catch(_){}
+}
 function scan(root){
   try{
     if(root.nodeType===3){var v=norm(root.nodeValue);if(ADD.test(v))handleDisclosure(root.parentElement,v);else if(ADL.test(v))handleMarker(root.parentElement,v);return;}
-    rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
+    rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);scanFeedAds(root);
   }catch(_){}
 }
-marker('JSALIVE234');
+marker('JSALIVE235');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -632,12 +658,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=234")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=235")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=234")
+				flowLog("DZEN_JS_BODY_OK ruleset=235")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -648,7 +674,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=234")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=235")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -666,17 +692,19 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case q == "JSALIVE230":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case q == "JSALIVE231":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case q == "JSALIVE233":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case q == "JSALIVE234":
-				flowLog("DZEN_JS_ALIVE ruleset=234")
+				flowLog("DZEN_JS_ALIVE ruleset=235")
+			case q == "JSALIVE235":
+				flowLog("DZEN_JS_ALIVE ruleset=235")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -701,6 +729,10 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_AD_DISCLOSURE_FOUND")
 			case q == "DISCCAR_RM":
 				flowLog("DZEN_DISCLOSURE_CAROUSEL_REMOVED")
+			case strings.HasPrefix(q, "FEED_AD_RULE_MATCH "):
+				flowLog("DZEN_FEED_AD_RULE_MATCH " + strings.TrimPrefix(q, "FEED_AD_RULE_MATCH "))
+			case q == "FEEDADRM":
+				flowLog("DZEN_FEED_AD_RULE_REMOVED")
 			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
 				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
@@ -809,8 +841,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=234")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=234")
+			flowLog("DZEN_COSMETIC_RULESET=235")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=235")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -1325,8 +1357,4 @@ func dzenSuspectWalk(node interface{}, reqPath, jpath string, depth int) {
 			dzenSuspectWalk(t[0], reqPath, jpath+"[0]", depth+1)
 		} else {
 			for i, el := range t {
-				dzenSuspectWalk(el, reqPath, fmt.Sprintf("%s[%d]", jpath, i), depth+1)
-			}
-		}
-	}
-}
+				dzenSuspectWalk(e
