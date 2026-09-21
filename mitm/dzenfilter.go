@@ -232,20 +232,44 @@ function handleMarker(el,mt){
     if(cls||triple||app){n.remove();removed=true;break;}
   }
   if(!removed){
-    var nearTop=false;
-    try{var r=el.getBoundingClientRect();nearTop=(r.top>=-50&&r.top<window.innerHeight*1.5);}catch(_){}
-    if(nearTop){
-      var b=el;
-      for(var u2=0;u2<5&&b.parentElement;u2++){
-        b=b.parentElement;
-        var bh=0;
-        try{bh=b.getBoundingClientRect().height;}catch(_){}
-        if(bh>window.innerHeight*0.6)break;
-        var sib=b.parentElement?b.parentElement.children.length:1;
-        if(sib<=3&&bh>40){sendDiag('TOPBANNER :: '+sigOf(b,4));marker('TOPBANNER');b.remove();break;}
-      }
+    var cand=topBannerCandidate(el);
+    if(cand){
+      try{
+        var cr=cand.getBoundingClientRect();
+        var nm=mt.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20);
+        sendDiag('TOPBANNER_CANDIDATE marker='+nm+' rect='+Math.round(cr.width)+'x'+Math.round(cr.height)+' :: '+sigOf(cand,4));
+      }catch(_){}
+      marker('TOPBANNER');
+      cand.remove();
     }
   }
+}
+// 231: geometry-based top-banner selection. Без sib<=3: подъём максимум на 8
+// ancestors, candidate = самый ВНЕШНИЙ узел, который ещё похож на отдельную
+// рекламную карточку: ширина >=60% viewport, 40px<=высота<=35% viewport,
+// не BODY/HTML, rect>0, не содержит несколько обычных новостных карточек.
+// Высота <=35% vh гарантирует, что блок новостей ниже не захватывается.
+function topBannerCandidate(el){
+  try{
+    var vw=window.innerWidth,vh=window.innerHeight;
+    var best=null;
+    var n=el;
+    for(var up=0;up<8&&n&&n.parentElement;up++){
+      n=n.parentElement;
+      var t=(n.tagName||'').toUpperCase();
+      if(t==='BODY'||t==='HTML')continue;
+      var r=n.getBoundingClientRect();
+      if(!r||r.width<=0||r.height<=0)continue;
+      if(r.width<vw*0.6)continue;
+      if(r.height<40)continue;
+      if(r.height>vh*0.35)continue;
+      var news=0;
+      try{news=n.querySelectorAll('article,[role="article"]').length;}catch(_){}
+      if(news>1)continue;
+      best=n;
+    }
+    return best;
+  }catch(_){return null;}
 }
 function eachText(root,cb){
   var doc=null;
@@ -295,7 +319,10 @@ function scanShadows(root){
       if(shadowSeen.indexOf(key)<0){
         shadowSeen.push(key);shadowCount++;
         scan(sr);
-        try{new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);else if(nd.nodeType===3&&ADL.test(norm(nd.nodeValue)))handleMarker(nd.parentElement,norm(nd.nodeValue));});});});}catch(_){}
+        try{
+          var sobs=new MutationObserver(function(ms){ms.forEach(function(m){if(m.addedNodes)m.addedNodes.forEach(function(nd){if(nd.nodeType===1)scan(nd);else if(nd.nodeType===3&&ADL.test(norm(nd.nodeValue)))handleMarker(nd.parentElement,norm(nd.nodeValue));});});});
+          sobs.observe(sr,{childList:true,subtree:true});
+        }catch(_){}
       }
     }
   });
@@ -306,7 +333,7 @@ function scan(root){
     rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE230');
+marker('JSALIVE231');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -417,12 +444,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=230")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=231")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=230")
+				flowLog("DZEN_JS_BODY_OK ruleset=231")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -433,7 +460,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=230")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=231")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -451,9 +478,13 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=230")
+				flowLog("DZEN_JS_ALIVE ruleset=231")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=230")
+				flowLog("DZEN_JS_ALIVE ruleset=231")
+			case q == "JSALIVE230":
+				flowLog("DZEN_JS_ALIVE ruleset=231")
+			case q == "JSALIVE231":
+				flowLog("DZEN_JS_ALIVE ruleset=231")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -464,6 +495,8 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_CAROUSEL_AD_FOUND")
 			case q == "CARWRAPPER":
 				flowLog("DZEN_CAROUSEL_WRAPPER_REMOVED")
+			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
+				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
 				flowLog("DZEN_TOP_BANNER_REMOVED")
 			case q != "":
@@ -571,7 +604,7 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 			}
 			body = []byte(dzenInjectCSS(string(body)))
 			flowLog("DZEN_COSMETIC_RULESET=230")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=230")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=231")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
