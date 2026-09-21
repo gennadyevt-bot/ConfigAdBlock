@@ -164,10 +164,11 @@ func firstAFromDNS(ans []byte) (string, error) {
 // metaCSPRe - ленивая инициализация regex для meta CSP (229)
 var metaCSPRe *regexp.Regexp
 
-// dzenAdMarkerRe — маркер рекламы в тексте карточек Дзена (верхний баннер
-// "реклама · 16+"). Одна логика с JS-боди (dzenCosmeticJS.ADL): self-check
-// при сборке гарантирует, что оба варианта принимают одни и те же строки.
-var dzenAdMarkerRe = regexp.MustCompile(`(?i)^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$`)
+// DzenAdMarkerRe — маркер рекламы в тексте карточек Дзена (верхний баннер
+// "реклама · 16+"). Одна логика с JS-боди (dzenCosmeticJS.ADL): selfcheck
+// (mitm/selfcheck) при сборке гарантирует, что оба варианта принимают одни
+// и те же строки.
+var DzenAdMarkerRe = regexp.MustCompile(`(?i)^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$`)
 
 var dzenCosmeticJS = `(function(){
 var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"]';
