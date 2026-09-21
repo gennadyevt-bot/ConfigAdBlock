@@ -205,26 +205,77 @@ function rmSel(root){
 }
 function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
 // 232: slides могут быть grandchildren (wrapper > track > slide).
-// Признаки: slide/carousel/swiper/track в descendants, pagination/dots,
-// horizontal scroll + несколько media. Без полного скана страницы —
-// только в пределах candidate.
+// 233: геометрический pager — 2-6 точек 4..24px, в одну горизонтальную линию,
+// близко друг к другу, родитель существенно меньше media block.
+// Без class="dot". Scan ограничен первыми 400 candidates внутри root.
+function findPager(root){
+  try{
+    if(!root||!root.querySelectorAll)return{found:false,count:0};
+    var all=root.querySelectorAll('*');
+    for(var i=0;i<all.length&&i<400;i++){
+      var p=all[i];
+      if(!p.children||p.children.length<2||p.children.length>6)continue;
+      var dots=0,ok=true,baseTop=-1;
+      for(var j=0;j<p.children.length&&ok;j++){
+        var c=p.children[j];
+        if(c.children&&c.children.length>0){ok=false;break;}
+        var r=c.getBoundingClientRect();
+        if(!r||r.width<4||r.width>24||r.height<4||r.height>24){ok=false;break;}
+        if(baseTop<0)baseTop=r.top;
+        else if(Math.abs(r.top-baseTop)>8){ok=false;break;}
+        if(j>0){var pr=p.children[j-1].getBoundingClientRect();if(Math.abs(r.left-(pr.left+pr.width))>32){ok=false;break;}}
+        dots++;
+      }
+      if(ok&&dots>=2){
+        var pr2=p.getBoundingClientRect();
+        var rootR=root.getBoundingClientRect?root.getBoundingClientRect():null;
+        if(rootR&&rootR.width>0&&pr2.width>rootR.width*0.8)continue;
+        return{found:true,count:dots};
+      }
+    }
+    return{found:false,count:0};
+  }catch(_){return{found:false,count:0};}
+}
+// 233: крупный media-сигнал — img/picture/video/canvas/div с background-image,
+// width >=50% viewport и height >=120px.
+function countLargeMedia(n){
+  var cnt=0;
+  try{
+    var vw=window.innerWidth;
+    var els=n.querySelectorAll('img,picture,video,canvas');
+    for(var i=0;i<els.length;i++){var r=els[i].getBoundingClientRect();if(r&&r.width>=vw*0.5&&r.height>=120)cnt++;}
+    var divs=n.querySelectorAll('[style*="background-image"]');
+    for(var k=0;k<divs.length;k++){var r2=divs[k].getBoundingClientRect();if(r2&&r2.width>=vw*0.5&&r2.height>=120)cnt++;}
+  }catch(_){}
+  return cnt;
+}
+// 233: multi-signal carousel. Никаких обязательных class names.
+// Подтверждение (marker уже найден выше по стеку):
+//   pager>=2 AND largeMedia>=1
+//   OR horizontal AND largeMedia>=1
+//   OR slideLikes>=2 AND (pager OR media>=2)
 function carouselInfo(n){
   if(!n||!n.querySelector)return null;
-  var dots=!!n.querySelector('[class*="dot"],[class*="pagination"],[class*="indicator"],[class*="bullet"],[class*="swiper-pagination"]');
-  var slideLikes=0;
-  try{slideLikes=n.querySelectorAll('[class*="slide"],[class*="carousel"],[class*="swiper"],[class*="track"]').length;}catch(_){}
-  if(slideLikes<2)return null;
-  var horiz=false;
-  try{var cs=getComputedStyle(n);horiz=(cs.overflowX==='auto'||cs.overflowX==='scroll')&&n.scrollWidth>n.clientWidth+40;}catch(_){}
+  var pager=findPager(n);
+  var largeMedia=countLargeMedia(n);
   var media=0;
   try{media=n.querySelectorAll('img,video,[class*="card-rtb"],[class*="adBox"]').length;}catch(_){}
-  if(dots||horiz||media>=2)return{slides:slideLikes,dots:dots,horiz:horiz};
-  return null;
+  var slideLikes=0;
+  try{slideLikes=n.querySelectorAll('[class*="slide"],[class*="carousel"],[class*="swiper"],[class*="track"]').length;}catch(_){}
+  var horiz=false;
+  try{var cs=getComputedStyle(n);horiz=(cs.overflowX==='auto'||cs.overflowX==='scroll')&&n.scrollWidth>n.clientWidth+40;}catch(_){}
+  var confirmed=(pager.found&&pager.count>=2&&largeMedia>=1)
+    ||(horiz&&largeMedia>=1)
+    ||(slideLikes>=2&&(pager.found||media>=2));
+  if(!confirmed)return null;
+  return{pager:pager.count,largeMedia:largeMedia,media:media,slideLikes:slideLikes,horiz:horiz,dots:pager.found};
 }
-// 232: двухфазный поиск. Phase 1 — собрать chain ДО любых remove():
-// внутренний advert-div больше не удаляется раньше, чем найден внешний
-// carousel wrapper. Carousel ищется по ВСЕЙ chain и берётся самый внешний
-// candidate, чтобы не осталось orphan-оболочки (dots/track/пустота).
+// 233: Phase 1 — собрать chain ДО любых remove(). Carousel analysis по всей
+// chain, удаляется самый внешний безопасный wrapper (pager+largeMedia,
+// height <=80% vh, не захватывает следующий пост). Phase 2 — orphan-guard:
+// inner card НЕ удаляется, если у ancestor pager>=2 и largeMedia>=1 —
+// удаляется outer candidate. Phase 3 — обычный ad container + orphan-check
+// бывшего parent. Phase 4 — topBannerCandidate (231, не менялся).
 function handleMarker(el,mt){
   if(!el)return;
   sendDiag('MARKER='+mt+' :: '+sigOf(el,6));
@@ -233,10 +284,16 @@ function handleMarker(el,mt){
   var car=null,ciBest=null;
   for(var i=0;i<chain.length;i++){
     var ci=carouselInfo(chain[i]);
-    if(ci){ciBest=ci;car=chain[i];}
+    if(!ci)continue;
+    var r=chain[i].getBoundingClientRect();
+    if(r&&r.height>window.innerHeight*0.8)continue;
+    var news=0;
+    try{news=chain[i].querySelectorAll('article,[role="article"]').length;}catch(_){}
+    if(news>1)continue;
+    ciBest=ci;car=chain[i];
   }
   if(car){
-    var cinfo='slides='+ciBest.slides+' dots='+ciBest.dots+' horizontal='+ciBest.horiz;
+    var cinfo='pager='+ciBest.pager+' largeMedia='+ciBest.largeMedia+' media='+ciBest.media+' slideLikes='+ciBest.slideLikes+' horizontal='+ciBest.horiz;
     try{var rr=car.getBoundingClientRect();cinfo+=' rect='+Math.round(rr.width)+'x'+Math.round(rr.height);}catch(_){}
     sendDiag('CAROUSEL_CANDIDATE '+cinfo+' :: '+sigOf(car,4));
     sendDiag('CAROUSEL_AD_FOUND '+cinfo);
@@ -247,12 +304,41 @@ function handleMarker(el,mt){
   }
   for(var j=0;j<chain.length;j++){
     n=chain[j];
+    var pg=findPager(n);
+    var lm=countLargeMedia(n);
+    if(pg.found&&pg.count>=2&&lm>=1){
+      var oi='pager='+pg.count+' largeMedia='+lm;
+      try{var or2=n.getBoundingClientRect();oi+=' rect='+Math.round(or2.width)+'x'+Math.round(or2.height);}catch(_){}
+      sendDiag('CAROUSEL_CANDIDATE orphan-guard '+oi+' :: '+sigOf(n,4));
+      marker('CAROUSEL');
+      n.remove();
+      marker('CARWRAPPER');
+      return;
+    }
+  }
+  for(var j2=0;j2<chain.length;j2++){
+    n=chain[j2];
     var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
     var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
     var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
     var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&(hasT(n,'Реклама')||hasT(n,'реклама'));
     if(app){sendDiag('APP :: '+sigOf(n,4));marker('APPAD');}
-    if(cls||triple||app){n.remove();return;}
+    if(cls||triple||app){
+      var parent=n.parentElement;
+      n.remove();
+      try{
+        if(parent&&parent.querySelector){
+          var txt=(parent.textContent||'').replace(/\s+/g,' ').trim();
+          var pg2=findPager(parent);
+          var lm2=countLargeMedia(parent);
+          if(pg2.found&&pg2.count>=2&&lm2>=1&&txt.length<40){
+            parent.remove();
+            marker('ORPHANCAR');
+          }
+        }
+      }catch(_){}
+      return;
+    }
   }
   var cand=topBannerCandidate(el);
   if(cand){
@@ -354,7 +440,7 @@ function scan(root){
     rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE231');
+marker('JSALIVE233');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -465,12 +551,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=231")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=233")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=231")
+				flowLog("DZEN_JS_BODY_OK ruleset=233")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -481,7 +567,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=231")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=233")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -499,13 +585,15 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=231")
+				flowLog("DZEN_JS_ALIVE ruleset=233")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=231")
+				flowLog("DZEN_JS_ALIVE ruleset=233")
 			case q == "JSALIVE230":
-				flowLog("DZEN_JS_ALIVE ruleset=231")
+				flowLog("DZEN_JS_ALIVE ruleset=233")
 			case q == "JSALIVE231":
-				flowLog("DZEN_JS_ALIVE ruleset=231")
+				flowLog("DZEN_JS_ALIVE ruleset=233")
+			case q == "JSALIVE233":
+				flowLog("DZEN_JS_ALIVE ruleset=233")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -520,6 +608,8 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_CAROUSEL_AD_FOUND")
 			case q == "CARWRAPPER":
 				flowLog("DZEN_CAROUSEL_WRAPPER_REMOVED")
+			case q == "ORPHANCAR":
+				flowLog("DZEN_ORPHAN_CAROUSEL_REMOVED")
 			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
 				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
@@ -628,8 +718,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=230")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=231")
+			flowLog("DZEN_COSMETIC_RULESET=233")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=233")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
