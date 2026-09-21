@@ -188,7 +188,7 @@ function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0&&sig.indexOf('APP_WRAPPER_CANDIDATE')<0&&sig.indexOf('APP_INNER_FALLBACK')<0)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0&&sig.indexOf('APP_WRAPPER_CANDIDATE')<0&&sig.indexOf('APP_INNER_FALLBACK')<0&&sig.indexOf('ORPHAN_MEDIA_CLEANED')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -273,13 +273,57 @@ function handleDisclosure(el,mt){
   }
   if(car){
     marker('DISCCAR');
+    var dcp=car.parentElement;
     car.remove();
     marker('DISCCAR_RM');
+    cleanupAdOrphan(dcp);
     return;
   }
   // disclosure есть, карусель по пагеру/media не подтвердилась —
   // отрабатываем как обычный ad marker
   try{handleMarker(anchor,mt);}catch(_){}
+}
+// 238: локальная очистка orphan-media ПОСЛЕ подтверждённого ad-remove.
+// Только бывший parent, его children и до 3 ancestors — НИКАКОГО document scan.
+// Candidate: нет article/role=article, нет «Подписаться»/«комментар», текст
+// после trim короткий (<80), есть крупный media (>=70% viewport и >=150px).
+// Pager/dots внутри candidate уходят вместе с ним. Защита обычных постов:
+// заголовок/автор/кнопки дают длинный текст или article — candidate skipped.
+function cleanupAdOrphan(start){
+  try{
+    if(!start||!start.querySelectorAll)return;
+    var vw=window.innerWidth;
+    var nodes=[];
+    nodes.push(start);
+    try{for(var s=0;s<start.children.length;s++)nodes.push(start.children[s]);}catch(_){}
+    var p=start;
+    for(var a=0;a<3&&p&&p.parentElement;a++){
+      p=p.parentElement;
+      var tg=(p.tagName||'').toUpperCase();
+      if(tg==='BODY'||tg==='HTML')break;
+      nodes.push(p);
+    }
+    for(var i=0;i<nodes.length;i++){
+      var n=nodes[i];
+      if(!n||!n.isConnected||!n.querySelectorAll)continue;
+      var tag=(n.tagName||'').toUpperCase();
+      if(tag==='BODY'||tag==='HTML')continue;
+      if(n.querySelector('article,[role="article"]'))continue;
+      var txt=(n.textContent||'').replace(/\s+/g,' ').trim();
+      if(txt.indexOf('Подписаться')>=0||txt.indexOf('комментар')>=0)continue;
+      if(txt.length>=80)continue;
+      var media=0;
+      var els=n.querySelectorAll('img,picture,video,canvas,[style*="background-image"]');
+      for(var m=0;m<els.length;m++){
+        var r=els[m].getBoundingClientRect();
+        if(r&&r.width>=vw*0.7&&r.height>=150)media++;
+      }
+      if(media<1)continue;
+      try{sendDiag('ORPHAN_MEDIA_CLEANED text='+txt.length+' media='+media);}catch(_){}
+      n.remove();
+      break;
+    }
+  }catch(_){}
 }
 // 237: сильная APP-сигнатура (Google Play app install ads).
 function isAppAd(n){
@@ -399,8 +443,10 @@ function handleMarker(el,mt){
           var fr=feed.getBoundingClientRect();
           var fnm=mt.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20);
           sendDiag('FEED_CAROUSEL_MARKER marker='+fnm+' pager='+fpg.count+' largeMedia='+flm+' rect='+Math.round(fr.width)+'x'+Math.round(fr.height));
+          var fp=feed.parentElement;
           feed.remove();
           marker('FEEDCAR_RM');
+          cleanupAdOrphan(fp);
           return;
         }
       }
@@ -425,8 +471,10 @@ function handleMarker(el,mt){
     sendDiag('CAROUSEL_CANDIDATE '+cinfo+' :: '+sigOf(car,4));
     sendDiag('CAROUSEL_AD_FOUND '+cinfo);
     marker('CAROUSEL');
+    var carp=car.parentElement;
     car.remove();
     marker('CARWRAPPER');
+    cleanupAdOrphan(carp);
     return;
   }
   for(var j=0;j<chain.length;j++){
@@ -438,8 +486,10 @@ function handleMarker(el,mt){
       try{var or2=n.getBoundingClientRect();oi+=' rect='+Math.round(or2.width)+'x'+Math.round(or2.height);}catch(_){}
       sendDiag('CAROUSEL_CANDIDATE orphan-guard '+oi+' :: '+sigOf(n,4));
       marker('CAROUSEL');
+      var ogp=n.parentElement;
       n.remove();
       marker('CARWRAPPER');
+      cleanupAdOrphan(ogp);
       return;
     }
   }
@@ -455,8 +505,10 @@ function handleMarker(el,mt){
       var orr=aw.getBoundingClientRect();
       var apg=findPager(aw);
       try{sendDiag('APP_WRAPPER_CANDIDATE inner='+Math.round(ir.width)+'x'+Math.round(ir.height)+' outer='+Math.round(orr.width)+'x'+Math.round(orr.height)+' pager='+(apg.found?apg.count:0)+' :: '+sigOf(aw,4));}catch(_){}
+      var appw=aw.parentElement;
       aw.remove();
       marker('APPW_RM');
+      cleanupAdOrphan(appw);
       return;
     }
     sendDiag('APP_INNER_FALLBACK');
@@ -477,8 +529,10 @@ function handleMarker(el,mt){
           var pg2=findPager(parent);
           var lm2=countLargeMedia(parent);
           if(pg2.found&&pg2.count>=2&&lm2>=1&&txt.length<40){
+            var op2=parent.parentElement;
             parent.remove();
             marker('ORPHANCAR');
+            cleanupAdOrphan(op2);
           }
         }
       }catch(_){}
@@ -605,8 +659,10 @@ function scanFeedAds(root){
       var pg=findPager(a.parentElement||a);
       var lm=countLargeMedia(a);
       sendDiag('FEED_AD_RULE_MATCH rect='+Math.round(r.width)+'x'+Math.round(r.height)+' hasPager='+pg.found+' largeMedia='+lm+' :: '+sigOf(a,3));
+      var fap=a.parentElement;
       a.remove();
       marker('FEEDADRM');
+      cleanupAdOrphan(fap);
     }
   }catch(_){}
 }
@@ -616,7 +672,7 @@ function scan(root){
     scanText(root);comboDisclosure(root);scanFeedAds(root);rmSel(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE237');
+marker('JSALIVE238');
 // 236: однократный probe структуры страницы — показывает, совпадает ли
 // AdGuard FEEDAD selector с нынешней мобильной вёрсткой Dzen вообще.
 var probed=false;
@@ -740,12 +796,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=237")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=238")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=237")
+				flowLog("DZEN_JS_BODY_OK ruleset=238")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -756,7 +812,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=237")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=238")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -774,23 +830,25 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE230":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE231":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE233":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE234":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE235":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE236":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case q == "JSALIVE237":
-				flowLog("DZEN_JS_ALIVE ruleset=237")
+				flowLog("DZEN_JS_ALIVE ruleset=238")
+			case q == "JSALIVE238":
+				flowLog("DZEN_JS_ALIVE ruleset=238")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -829,6 +887,8 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_APP_AD_WRAPPER_CANDIDATE " + strings.TrimPrefix(q, "APP_WRAPPER_CANDIDATE "))
 			case q == "APPW_RM":
 				flowLog("DZEN_APP_AD_WRAPPER_REMOVED")
+			case strings.HasPrefix(q, "ORPHAN_MEDIA_CLEANED "):
+				flowLog("DZEN_ORPHAN_MEDIA_CLEANED " + strings.TrimPrefix(q, "ORPHAN_MEDIA_CLEANED "))
 			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
 				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
@@ -937,8 +997,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=237")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=237")
+			flowLog("DZEN_COSMETIC_RULESET=238")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=238")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
