@@ -188,7 +188,7 @@ function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0&&sig.indexOf('APP_WRAPPER_CANDIDATE')<0&&sig.indexOf('APP_INNER_FALLBACK')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -280,6 +280,35 @@ function handleDisclosure(el,mt){
   // disclosure есть, карусель по пагеру/media не подтвердилась —
   // отрабатываем как обычный ad marker
   try{handleMarker(anchor,mt);}catch(_){}
+}
+// 237: сильная APP-сигнатура (Google Play app install ads).
+function isAppAd(n){
+  try{return hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&(hasT(n,'Реклама')||hasT(n,'реклама'));}catch(_){return false;}
+}
+// 237: outer APP wrapper из chain — самый внешний безопасный ancestor:
+// width >=75% viewport, 220px <= height <= 70% vh, содержит APP marker,
+// не BODY/HTML, <=1 обычная статья. Pager — только бонусный сигнал.
+function findAppAdWrapper(el,chain){
+  try{
+    var vw=window.innerWidth,vh=window.innerHeight;
+    var best=null;
+    for(var i=0;i<chain.length;i++){
+      var a=chain[i];
+      var t=(a.tagName||'').toUpperCase();
+      if(t==='BODY'||t==='HTML')continue;
+      if(!isAppAd(a))continue;
+      var r=a.getBoundingClientRect();
+      if(!r||r.width<=0||r.height<=0)continue;
+      if(r.width<vw*0.75)continue;
+      if(r.height<220)continue;
+      if(r.height>vh*0.7)continue;
+      var news=0;
+      try{news=a.querySelectorAll('article,[role="article"]').length;}catch(_){}
+      if(news>1)continue;
+      best=a;
+    }
+    return best;
+  }catch(_){return null;}
 }
 // 233: геометрический pager — 2-6 точек 4..24px, в одну горизонтальную линию,
 // близко друг к другу, родитель существенно меньше media block.
@@ -414,13 +443,31 @@ function handleMarker(el,mt){
       return;
     }
   }
+  // 237: APP-ad (Google Play) — удаляется OUTER wrapper целиком (~340x358),
+  // а не первый inner ancestor (~340x156). Сильная текстовая сигнатура +
+  // геометрия + ограничение по article. Хешированные классы НЕ используются.
+  var appHit=false;
+  for(var ai=0;ai<chain.length;ai++){if(isAppAd(chain[ai])){appHit=true;break;}}
+  if(appHit){
+    var aw=findAppAdWrapper(el,chain);
+    if(aw){
+      var ir=el.getBoundingClientRect();
+      var orr=aw.getBoundingClientRect();
+      var apg=findPager(aw);
+      try{sendDiag('APP_WRAPPER_CANDIDATE inner='+Math.round(ir.width)+'x'+Math.round(ir.height)+' outer='+Math.round(orr.width)+'x'+Math.round(orr.height)+' pager='+(apg.found?apg.count:0)+' :: '+sigOf(aw,4));}catch(_){}
+      aw.remove();
+      marker('APPW_RM');
+      return;
+    }
+    sendDiag('APP_INNER_FALLBACK');
+  }
   for(var j2=0;j2<chain.length;j2++){
     n=chain[j2];
     var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
     var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
     var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
     var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&(hasT(n,'Реклама')||hasT(n,'реклама'));
-    if(app){sendDiag('APP :: '+sigOf(n,4));marker('APPAD');}
+    if(app){sendDiag('APP :: '+sigOf(n,4));marker('APPAD');} // 237: достижимо только если findAppAdWrapper не нашёл outer
     if(cls||triple||app){
       var parent=n.parentElement;
       n.remove();
@@ -569,7 +616,7 @@ function scan(root){
     scanText(root);comboDisclosure(root);scanFeedAds(root);rmSel(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE236');
+marker('JSALIVE237');
 // 236: однократный probe структуры страницы — показывает, совпадает ли
 // AdGuard FEEDAD selector с нынешней мобильной вёрсткой Dzen вообще.
 var probed=false;
@@ -693,12 +740,12 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=236")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=237")
 			jb := []byte(dzenCosmeticJS)
 			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
 				flowLog("DZEN_JS_BODY_INVALID")
 			} else {
-				flowLog("DZEN_JS_BODY_OK ruleset=236")
+				flowLog("DZEN_JS_BODY_OK ruleset=237")
 			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -709,7 +756,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=236")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=237")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -727,21 +774,23 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE230":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE231":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE233":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE234":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE235":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case q == "JSALIVE236":
-				flowLog("DZEN_JS_ALIVE ruleset=236")
+				flowLog("DZEN_JS_ALIVE ruleset=237")
+			case q == "JSALIVE237":
+				flowLog("DZEN_JS_ALIVE ruleset=237")
 			case strings.HasPrefix(q, "ADMARKER "):
 				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
@@ -776,6 +825,10 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_FEED_CAROUSEL_MARKER_FOUND " + strings.TrimPrefix(q, "FEED_CAROUSEL_MARKER "))
 			case q == "FEEDCAR_RM":
 				flowLog("DZEN_FEED_CAROUSEL_REMOVED")
+			case strings.HasPrefix(q, "APP_WRAPPER_CANDIDATE "):
+				flowLog("DZEN_APP_AD_WRAPPER_CANDIDATE " + strings.TrimPrefix(q, "APP_WRAPPER_CANDIDATE "))
+			case q == "APPW_RM":
+				flowLog("DZEN_APP_AD_WRAPPER_REMOVED")
 			case strings.HasPrefix(q, "TOPBANNER_CANDIDATE "):
 				flowLog("DZEN_TOP_BANNER_CANDIDATE " + strings.TrimPrefix(q, "TOPBANNER_CANDIDATE "))
 			case q == "TOPBANNER":
@@ -884,8 +937,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=236")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=236")
+			flowLog("DZEN_COSMETIC_RULESET=237")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=237")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
