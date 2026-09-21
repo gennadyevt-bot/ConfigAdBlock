@@ -12,7 +12,7 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.26'
-    - run: cd mitm && go mod tidy && go build ./...
+    - run: cd mitm && go mod tidy && go build ./... && go test ./...
   build:
     runs-on: ubuntu-latest
     steps:
