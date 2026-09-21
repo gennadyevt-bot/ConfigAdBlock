@@ -58,7 +58,8 @@ div[class^="BrandingAdvert"],
 .article-render-mobile__embed_embed-type_yandex-direct,
 div[class^="dzen-desktop--banner-"],
 div[class*="-corner-banner__"],
-div[class^="content--dzen-pro-"] { display: none !important; }
+div[class^="content--dzen-pro-"],
+div[class^="dzen-mobile__bannerMain-"] { display: none !important; }
 `
 
 func isDzenHost(h string) bool {
@@ -171,14 +172,14 @@ var metaCSPRe *regexp.Regexp
 var DzenAdMarkerRe = regexp.MustCompile(`(?i)^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$`)
 
 var dzenCosmeticJS = `(function(){
-var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"]';
+var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"],div[class^="dzen-mobile__bannerMain-"]';
 var ADL=/^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$/i;
 var diagSent=0,iframeSent=0,iframeSeen={},shadowSeen=[],shadowCount=0;
 function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(diagSent>=8||!sig||sig.length>1000)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -203,45 +204,65 @@ function rmSel(root){
   root.querySelectorAll(sels).forEach(function(e){e.remove();});
 }
 function hasT(root,t){return (root.textContent||'').indexOf(t)>=0;}
+// 232: slides могут быть grandchildren (wrapper > track > slide).
+// Признаки: slide/carousel/swiper/track в descendants, pagination/dots,
+// horizontal scroll + несколько media. Без полного скана страницы —
+// только в пределах candidate.
 function carouselInfo(n){
-  var kids=n.children;if(!kids||kids.length<2)return null;
-  var same=0,first=kids[0];
-  for(var i2=0;i2<kids.length;i2++){if(kids[i2].tagName===first.tagName&&kids[i2].children)same++;}
-  if(same<2)return null;
-  var dots=!!n.querySelector('[class*="dot"],[class*="pagination"],[class*="indicator"],[class*="bullet"],[class*="swiper"]');
+  if(!n||!n.querySelector)return null;
+  var dots=!!n.querySelector('[class*="dot"],[class*="pagination"],[class*="indicator"],[class*="bullet"],[class*="swiper-pagination"]');
+  var slideLikes=0;
+  try{slideLikes=n.querySelectorAll('[class*="slide"],[class*="carousel"],[class*="swiper"],[class*="track"]').length;}catch(_){}
+  if(slideLikes<2)return null;
   var horiz=false;
   try{var cs=getComputedStyle(n);horiz=(cs.overflowX==='auto'||cs.overflowX==='scroll')&&n.scrollWidth>n.clientWidth+40;}catch(_){}
-  if(dots||horiz)return{slides:same,dots:dots};
+  var media=0;
+  try{media=n.querySelectorAll('img,video,[class*="card-rtb"],[class*="adBox"]').length;}catch(_){}
+  if(dots||horiz||media>=2)return{slides:slideLikes,dots:dots,horiz:horiz};
   return null;
 }
+// 232: двухфазный поиск. Phase 1 — собрать chain ДО любых remove():
+// внутренний advert-div больше не удаляется раньше, чем найден внешний
+// carousel wrapper. Carousel ищется по ВСЕЙ chain и берётся самый внешний
+// candidate, чтобы не осталось orphan-оболочки (dots/track/пустота).
 function handleMarker(el,mt){
   if(!el)return;
   sendDiag('MARKER='+mt+' :: '+sigOf(el,6));
-  var n=el,removed=false;
-  for(var up=0;up<10&&n&&n.parentElement;up++){
-    n=n.parentElement;
-    var ci=carouselInfo(n);
-    var info='children='+(n.children?n.children.length:0)+' sw='+n.scrollWidth+' cw='+n.clientWidth+' dots='+((n.querySelector&&!!n.querySelector('[class*="dot"],[class*="pagination"],[class*="indicator"],[class*="bullet"],[class*="swiper"]'))?('true'):('false'));
+  var chain=[],n=el;
+  for(var up=0;up<10&&n&&n.parentElement;up++){n=n.parentElement;chain.push(n);}
+  var car=null,ciBest=null;
+  for(var i=0;i<chain.length;i++){
+    var ci=carouselInfo(chain[i]);
+    if(ci){ciBest=ci;car=chain[i];}
+  }
+  if(car){
+    var cinfo='slides='+ciBest.slides+' dots='+ciBest.dots+' horizontal='+ciBest.horiz;
+    try{var rr=car.getBoundingClientRect();cinfo+=' rect='+Math.round(rr.width)+'x'+Math.round(rr.height);}catch(_){}
+    sendDiag('CAROUSEL_CANDIDATE '+cinfo+' :: '+sigOf(car,4));
+    sendDiag('CAROUSEL_AD_FOUND '+cinfo);
+    marker('CAROUSEL');
+    car.remove();
+    marker('CARWRAPPER');
+    return;
+  }
+  for(var j=0;j<chain.length;j++){
+    n=chain[j];
     var s=((n.className&&n.className.toString)?n.className.toString():'')+' '+((n.id)||'');
     var cls=/advert|advertising|banner|adbox|rtb|zenad|brandingadvert/i.test(s);
     var triple=hasT(n,'Реклама')&&hasT(n,'Скрыть')&&hasT(n,'Пожаловаться');
     var app=hasT(n,'Рейтинг и отзывы')&&hasT(n,'О приложении')&&(hasT(n,'Реклама')||hasT(n,'реклама'));
-    sendDiag('ANC '+info+' car='+(ci?('true'):('false'))+' :: '+sigOf(n,3));
-    if(ci){sendDiag('CAROUSEL '+info+' :: '+sigOf(n,4));marker('CAROUSEL');n.remove();marker('CARWRAPPER');removed=true;break;}
     if(app){sendDiag('APP :: '+sigOf(n,4));marker('APPAD');}
-    if(cls||triple||app){n.remove();removed=true;break;}
+    if(cls||triple||app){n.remove();return;}
   }
-  if(!removed){
-    var cand=topBannerCandidate(el);
-    if(cand){
-      try{
-        var cr=cand.getBoundingClientRect();
-        var nm=mt.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20);
-        sendDiag('TOPBANNER_CANDIDATE marker='+nm+' rect='+Math.round(cr.width)+'x'+Math.round(cr.height)+' :: '+sigOf(cand,4));
-      }catch(_){}
-      marker('TOPBANNER');
-      cand.remove();
-    }
+  var cand=topBannerCandidate(el);
+  if(cand){
+    try{
+      var cr=cand.getBoundingClientRect();
+      var nm=mt.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20);
+      sendDiag('TOPBANNER_CANDIDATE marker='+nm+' rect='+Math.round(cr.width)+'x'+Math.round(cr.height)+' :: '+sigOf(cand,4));
+    }catch(_){}
+    marker('TOPBANNER');
+    cand.remove();
   }
 }
 // 231: geometry-based top-banner selection. Без sib<=3: подъём максимум на 8
@@ -491,6 +512,10 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 				flowLog("DZEN_IFRAME_DIAG host=" + strings.TrimPrefix(q, "IFRAME host="))
 			case q == "APPAD":
 				flowLog("DZEN_APP_AD_REMOVED")
+			case strings.HasPrefix(q, "CAROUSEL_CANDIDATE "):
+				flowLog("DZEN_CAROUSEL_CANDIDATE " + strings.TrimPrefix(q, "CAROUSEL_CANDIDATE "))
+			case strings.HasPrefix(q, "CAROUSEL_AD_FOUND "):
+				flowLog("DZEN_CAROUSEL_AD_FOUND " + strings.TrimPrefix(q, "CAROUSEL_AD_FOUND "))
 			case q == "CAROUSEL":
 				flowLog("DZEN_CAROUSEL_AD_FOUND")
 			case q == "CARWRAPPER":
