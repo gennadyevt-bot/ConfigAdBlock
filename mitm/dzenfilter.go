@@ -164,9 +164,9 @@ func firstAFromDNS(ans []byte) (string, error) {
 // metaCSPRe - ленивая инициализация regex для meta CSP (229)
 var metaCSPRe *regexp.Regexp
 
-var dzenCosmeticJS = `<script data-cablock>(function(){
+var dzenCosmeticJS = `(function(){
 var sels='[data-ad-type="direct"],[data-ad-type="banner"],[data-ad-type="rtb"],.card-rtb,[class*="adBox"],[class*="MyTargetAdvert"],[class*="advertItem"],[data-testid="bottom-ad"],div[class*="topContent"][class*="mobile__hasBanner"],div[class*="news"] > div[class*="_banner_"],.zenad-card-rtb,.news-mt-advert,.mg-advert > div[class*="loader"],div[class*="Advert_"],div[class^="BrandingAdvert"],.news-advert-column,.article-render-mobile__embed_embed-type_yandex-direct,div[class^="dzen-desktop--banner-"],div[class*="-corner-banner__"],div[class^="content--dzen-pro-"]';
-var ADL=/^(?:реклама|соцреклама)(?: \d+\+)?$/i;
+var ADL=/^(?:реклама|соцреклама)(?:\s*[·•|—-]?\s*\d+\+)?$/i;
 var diagSent=0,iframeSent=0,iframeSeen={},shadowSeen=[],shadowCount=0;
 function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
@@ -255,6 +255,7 @@ function scanText(root){
   eachText(root,function(tn){
     var v=norm(tn.nodeValue);
     if(!v||!ADL.test(v))return;
+    try{beacon('ADMARKER '+v.replace(/\s+/g,'_').replace(/[·•|—-]/g,'_').slice(0,20));}catch(_){}
     try{handleMarker(tn.parentElement,v);}catch(_){}
   });
 }
@@ -299,7 +300,7 @@ function scan(root){
     rmSel(root);scanText(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
-marker('JSALIVE229');
+marker('JSALIVE230');
 scan(document);
 [0,250,750,1500,3000,5000].forEach(function(t){setTimeout(function(){scan(document);},t);});
 new MutationObserver(function(ms){
@@ -308,7 +309,7 @@ new MutationObserver(function(ms){
     m.addedNodes.forEach(function(nd){scan(nd);});
   });
 }).observe(document.documentElement,{childList:true,subtree:true});
-})();</script>`
+})();`
 
 // dzenInjectCSS внедряет external script/css (229): <script src="/__configadblock.js">
 // и <link href="/__configadblock.css"> обслуживаются ЛОКАЛЬНО нашим MITM -
@@ -410,8 +411,13 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 
 		// 229: локальные asset-endpoint'ы - сами обслуживаем наши JS/CSS
 		if req.URL.Path == "/__configadblock.js" {
-			flowLog("DZEN_JS_FILE_REQUEST ruleset=229")
+			flowLog("DZEN_JS_FILE_REQUEST ruleset=230")
 			jb := []byte(dzenCosmeticJS)
+			if bytes.HasPrefix(jb, []byte("<script")) || bytes.Contains(jb, []byte("</script>")) {
+				flowLog("DZEN_JS_BODY_INVALID")
+			} else {
+				flowLog("DZEN_JS_BODY_OK ruleset=230")
+			}
 			jr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
 				Body: io.NopCloser(bytes.NewReader(jb)), ContentLength: int64(len(jb)), Close: false, Request: req}
@@ -421,7 +427,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			continue
 		}
 		if req.URL.Path == "/__configadblock.css" {
-			flowLog("DZEN_CSS_FILE_REQUEST ruleset=229")
+			flowLog("DZEN_CSS_FILE_REQUEST ruleset=230")
 			cb := []byte(dzenCSS)
 			cr := &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1",
 				ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header),
@@ -439,9 +445,11 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			}
 			switch {
 			case q == "JSALIVE228":
-				flowLog("DZEN_JS_ALIVE ruleset=229")
+				flowLog("DZEN_JS_ALIVE ruleset=230")
 			case q == "JSALIVE229":
-				flowLog("DZEN_JS_ALIVE ruleset=229")
+				flowLog("DZEN_JS_ALIVE ruleset=230")
+			case strings.HasPrefix(q, "ADMARKER "):
+				flowLog("DZEN_AD_MARKER_MATCH value=" + strings.TrimPrefix(q, "ADMARKER "))
 			case strings.HasPrefix(q, "IFRAME host="):
 				flowLog("DZEN_IFRAME_DIAG host=" + strings.TrimPrefix(q, "IFRAME host="))
 			case q == "APPAD":
@@ -556,8 +564,8 @@ func filterDzenResponse(resp *http.Response, reqPath string) error {
 				flowLog("DZEN_META_CSP_REMOVED")
 			}
 			body = []byte(dzenInjectCSS(string(body)))
-			flowLog("DZEN_COSMETIC_RULESET=229")
-		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=229")
+			flowLog("DZEN_COSMETIC_RULESET=230")
+		flowLog("DZEN_COSMETIC_INJECTED path=" + reqPath + " ruleset=230")
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			resp.ContentLength = int64(len(body))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
