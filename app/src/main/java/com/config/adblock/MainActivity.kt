@@ -2,6 +2,7 @@ package com.config.adblock
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -12,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.View
 import android.widget.TextView
 import android.widget.Toast
 import javax.net.ssl.TrustManagerFactory
@@ -40,6 +42,7 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("stats", MODE_PRIVATE)
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         findViewById<TextView>(R.id.tvVersion).text = "v" + ver
+        setupExpandableSections()
         // пинг движка: если gomobile-runtime зависает ещё на старте —
         // увидим это ДО любого запуска фильтра
         thread {
@@ -78,6 +81,24 @@ class MainActivity : AppCompatActivity() {
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    private fun setupExpandableSections() {
+        val settingsHeader = findViewById<TextView>(R.id.btnSettingsExpand)
+        val settings = findViewById<View>(R.id.settingsContent)
+        settingsHeader.setOnClickListener {
+            val open = settings.visibility != View.VISIBLE
+            settings.visibility = if (open) View.VISIBLE else View.GONE
+            settingsHeader.text = if (open) "Настройки  ⌄" else "Настройки  ›"
+        }
+
+        val statsHeader = findViewById<TextView>(R.id.btnStatsExpand)
+        val stats = findViewById<View>(R.id.statsContent)
+        statsHeader.setOnClickListener {
+            val open = stats.visibility != View.VISIBLE
+            stats.visibility = if (open) View.VISIBLE else View.GONE
+            statsHeader.text = if (open) "Статистика и журнал  ⌄" else "Статистика и журнал  ›"
         }
     }
 
@@ -302,6 +323,8 @@ class MainActivity : AppCompatActivity() {
         val btn = findViewById<MaterialButton>(R.id.btnToggle)
         val stats = findViewById<TextView>(R.id.tvStats)
         val err = findViewById<TextView>(R.id.tvError)
+        val state = findViewById<TextView>(R.id.tvState)
+        val stateHint = findViewById<TextView>(R.id.tvStateHint)
         val running = FilterService.isRunning
         val consentNeeded = try { VpnService.prepare(this) != null } catch (e: Exception) { false }
         val lasterr = prefs.getString("lasterr", "") ?: ""
@@ -310,6 +333,18 @@ class MainActivity : AppCompatActivity() {
             consentNeeded -> "РАЗРЕШИТЬ VPN"
             else -> "ВКЛЮЧИТЬ"
         }
+        state.text = when {
+            running -> "Защита включена"
+            consentNeeded -> "Нужно разрешение VPN"
+            else -> "Защита выключена"
+        }
+        stateHint.text = when {
+            running -> "Реклама блокируется"
+            consentNeeded -> "Android попросит подтвердить подключение"
+            else -> "Нажмите кнопку, чтобы убрать рекламу"
+        }
+        btn.backgroundTintList = ColorStateList.valueOf(getColor(if (running) R.color.green_active_button else R.color.white_bg))
+        btn.setTextColor(getColor(R.color.green_primary))
         // Журнал: пока сервис жив — текущий поток FlowLog; после STOP —
         // сохранённый снапшот последней сессии (GPT: лог не должен
         // исчезать раньше анализа).

@@ -4,4 +4,5 @@
     <color name="green_dark">#1B6E1B</color>
     <color name="white_bg">#FFFFFF</color>
     <color name="text_dark">#1A1A1A</color>
+    <color name="green_active_button">#DFF6E1</color>
 </resources>
