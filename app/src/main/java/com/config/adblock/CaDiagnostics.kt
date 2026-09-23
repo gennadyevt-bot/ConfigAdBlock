@@ -16,6 +16,46 @@ object CaDiagnostics {
         MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString("") { "%02X".format(it.toInt() and 255) }
 
+    // 243: машинно-читаемый статус CA. installedExact=true означает только
+    // «точно этот CA найден в AndroidCAStore», НЕ «браузер ему доверяет».
+    data class CaStatus(
+        val fileExists: Boolean,
+        val installedExact: Boolean,
+        val engineMatchesFile: Boolean,
+        val fingerprint: String,
+        val olderSameName: Int
+    )
+
+    fun status(context: Context): CaStatus {
+        val crt = File(context.filesDir, "ca.crt")
+        val fileExists = crt.exists()
+        val fp = if (fileExists) sha256Hex(crt.readBytes()) else ""
+        var installedExact = false
+        var older = 0
+        try {
+            val ks = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
+            val aliases: Enumeration<String> = ks.aliases()
+            while (aliases.hasMoreElements()) {
+                val a = aliases.nextElement()
+                if (!a.startsWith(OUR_PREFIX)) continue
+                val c = ks.getCertificate(a) as? X509Certificate ?: continue
+                if (!c.subjectX500Principal.name.contains("Config AdBlock")) continue
+                if (sha256Hex(c.encoded) == fp) installedExact = true else older++
+            }
+        } catch (_: Exception) {}
+        val engineFp = try { mitm.Mitm.activeCAFingerprint() } catch (e: Exception) { "" }
+        return CaStatus(
+            fileExists = fileExists,
+            installedExact = installedExact,
+            engineMatchesFile = engineFp.isNotEmpty() && engineFp == fp,
+            fingerprint = fp,
+            olderSameName = older
+        )
+    }
+
+    private fun sha256Hex(b: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+
     fun inspect(context: Context): String {
         return try {
             val file = File(context.filesDir, "ca.crt")

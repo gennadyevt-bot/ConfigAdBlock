@@ -287,7 +287,39 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    // 243: обновление CA-статуса в prefs. CA не сбрасывается и не
+    // пересоздаётся — только чтение файла + сверка с AndroidCAStore.
+    private var caStatusLogged = false
+    private var caDupLogged = false
+    private fun checkCa() {
+        try {
+            val st = CaDiagnostics.status(this)
+            prefs.edit()
+                .putBoolean("ca_missing", st.fileExists && !st.installedExact)
+                .putBoolean("ca_engine_match", st.engineMatchesFile)
+                .apply()
+            if (!caStatusLogged) {
+                caStatusLogged = true
+                FilterService().saveErr("CA_FILE_FP=" + (if (st.fingerprint.isEmpty()) "none" else st.fingerprint))
+                FilterService().saveErr("CA_ANDROID_EXACT=" + st.installedExact)
+                FilterService().saveErr("CA_ENGINE_MATCH=" + st.engineMatchesFile)
+            }
+            if (st.olderSameName > 0 && !caDupLogged) {
+                caDupLogged = true
+                FilterService().saveErr("CA_OLD_DUPLICATES count=" + st.olderSameName)
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun startFilter() {
+        checkCa()
+        if (prefs.getBoolean("ca_missing", false)) {
+            try {
+                findViewById<android.view.View>(R.id.settingsContent).visibility = android.view.View.VISIBLE
+                findViewById<android.widget.TextView>(R.id.btnSettingsExpand).text = "Настройки  ⌄"
+                findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCert).text = "⚠ Установить сертификат (обязательно)"
+            } catch (_: Exception) {}
+        }
         val i = Intent(this, FilterService::class.java)
         i.putExtra("https", true)
         try {
@@ -300,6 +332,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        checkCa()
         thread {
             val result = CaDiagnostics.inspect(this@MainActivity)
             prefs.edit().putString("ca_diagnostics", result).apply()
@@ -336,12 +369,20 @@ class MainActivity : AppCompatActivity() {
             consentNeeded -> "РАЗРЕШИТЬ VPN"
             else -> "ВКЛЮЧИТЬ"
         }
+        // 243: честные состояния CA — не врать «Реклама блокируется»,
+        // когда HTTPS-фильтрация фактически не работает.
+        val caReject = prefs.getBoolean("ca_browser_reject", false)
+        val caMissing = prefs.getBoolean("ca_missing", false)
         state.text = when {
+            running && caReject -> "Сертификат не принят браузером"
+            running && caMissing -> "Требуется сертификат"
             running -> "Защита включена"
             consentNeeded -> "Нужно разрешение VPN"
             else -> "Защита выключена"
         }
         stateHint.text = when {
+            running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат Config AdBlock (кнопка в настройках)."
+            running && caMissing -> "Установите сертификат Config AdBlock — без него HTTPS-реклама не блокируется."
             running -> "Реклама блокируется"
             consentNeeded -> "Android попросит подтвердить подключение"
             else -> "Нажмите кнопку, чтобы убрать рекламу"

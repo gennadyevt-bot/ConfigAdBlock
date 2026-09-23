@@ -601,6 +601,17 @@ class FilterService : VpnService() {
             } catch (e: Exception) {
                 saveErr("HEV_CA_INIT_FAIL " + (e.message ?: e.javaClass.simpleName))
             }
+            // 243: новая сессия HEV — сбрасываем флаг прошлого отказа браузера;
+            // CA не сбрасывается и не пересоздаётся (loadOrCreateCA не тронут),
+            // здесь только чтение файла + сверка fingerprint.
+            sp.edit().putBoolean("ca_browser_reject", false).apply()
+            try {
+                val st = CaDiagnostics.status(this@FilterService)
+                saveErr("CA_FILE_FP=" + (if (st.fingerprint.isEmpty()) "none" else st.fingerprint))
+                saveErr("CA_ANDROID_EXACT=" + st.installedExact)
+                saveErr("CA_ENGINE_MATCH=" + st.engineMatchesFile)
+                if (st.olderSameName > 0) saveErr("CA_OLD_DUPLICATES count=" + st.olderSameName)
+            } catch (_: Exception) {}
             try {
                 mitm.Mitm.setProtector(object : mitm.Protector {
                     override fun protect(fd: Long): Boolean {
@@ -697,9 +708,26 @@ class FilterService : VpnService() {
                     }
                 } catch (_: Exception) {}
                 // 2.0.9/211: flowlog на экран раз в секунду вместе со stackstats
+                val flowNow = mitm.Mitm.flowLog()
+                // 243: runtime-детект отказа браузера доверять CA. Только
+                // доверительные ошибки — остальные TLS_REJECT остаются диагностикой.
+                try {
+                    if (flowNow.contains("DZEN_TLS_REJECT")) {
+                        val low = flowNow.toLowerCase()
+                        val trustErr = listOf("unknown certificate", "unknown ca", "certificate unknown", "bad certificate", "certificate verify failure").any { low.contains(it) }
+                        if (trustErr && !sp.getBoolean("ca_browser_reject", false)) {
+                            sp.edit().putBoolean("ca_browser_reject", true).apply()
+                            val rejLine = flowNow.lines().lastOrNull { it.contains("DZEN_TLS_REJECT") } ?: "DZEN_TLS_REJECT"
+                            saveErr("CA_BROWSER_REJECT " + rejLine)
+                        }
+                    }
+                    if (flowNow.contains("DZEN_TLS_OK") && sp.getBoolean("ca_browser_reject", false)) {
+                        sp.edit().putBoolean("ca_browser_reject", false).apply()
+                    }
+                } catch (_: Exception) {}
                 sp.edit()
                     .putString("stackstats", mitm.Mitm.transportFilterStats() + " " + mitm.Mitm.contentStats())
-                    .putString("flowlog", mitm.Mitm.flowLog())
+                    .putString("flowlog", flowNow)
                     .apply()
             }
         } catch (t: Throwable) {
