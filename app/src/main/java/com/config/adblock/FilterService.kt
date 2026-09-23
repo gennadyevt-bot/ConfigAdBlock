@@ -36,7 +36,7 @@ class FilterService : VpnService() {
     @Volatile private var httpsMode = false
     private var fgTicks = 0
 
-    private fun saveErr(msg: String) {
+    fun saveErr(msg: String) {
         try {
             val prefs = getSharedPreferences("stats", MODE_PRIVATE)
             val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
@@ -713,7 +713,7 @@ class FilterService : VpnService() {
                 // доверительные ошибки — остальные TLS_REJECT остаются диагностикой.
                 try {
                     if (flowNow.contains("DZEN_TLS_REJECT")) {
-                        val low = flowNow.toLowerCase()
+                        val low = flowNow.lowercase()
                         val trustErr = listOf("unknown certificate", "unknown ca", "certificate unknown", "bad certificate", "certificate verify failure").any { low.contains(it) }
                         if (trustErr && !sp.getBoolean("ca_browser_reject", false)) {
                             sp.edit().putBoolean("ca_browser_reject", true).apply()

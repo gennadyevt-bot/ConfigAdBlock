@@ -34,10 +34,10 @@ object CaDiagnostics {
         var older = 0
         try {
             val ks = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
-            val aliases: Enumeration<String> = ks.aliases()
+            val aliases = ks.aliases()
             while (aliases.hasMoreElements()) {
                 val a = aliases.nextElement()
-                if (!a.startsWith(OUR_PREFIX)) continue
+                if (!a.startsWith("user:")) continue
                 val c = ks.getCertificate(a) as? X509Certificate ?: continue
                 if (!c.subjectX500Principal.name.contains("Config AdBlock")) continue
                 if (sha256Hex(c.encoded) == fp) installedExact = true else older++
