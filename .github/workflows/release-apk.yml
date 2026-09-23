@@ -7,9 +7,6 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.39-transport"
-  push:
-    branches: [ transport-core-v2 ]
-    paths: [ '.github/workflows/release-apk.yml' ]
 
 jobs:
   release:
@@ -20,20 +17,46 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: transport-core-v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "ndk;26.1.10909125" || echo "y" | sdkmanager "ndk;26.1.10909125"
+      - name: gomobile bind
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          cd mitm && go mod tidy && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "21"
-      - uses: android-actions/setup-android@v3
-      - name: Build release APK
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '9.7.1'
+      - name: Build hev-socks5-tunnel JNI
         run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease
-      - name: Create release with APK
+          set -e
+          git clone --depth 1 --branch 2.17.1 --recurse-submodules https://github.com/heiher/hev-socks5-tunnel.git /tmp/hev
+          cd /tmp/hev
+          ln -sf . jni
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q android-ndk-r27d-linux.zip
+          ./android-ndk-r27d/ndk-build clean
+          ./android-ndk-r27d/ndk-build APP_MODULES=hev-socks5-tunnel -j$(nproc)
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            mkdir -p $GITHUB_WORKSPACE/app/src/main/jniLibs/$abi
+            cp libs/$abi/libhev-socks5-tunnel.so $GITHUB_WORKSPACE/app/src/main/jniLibs/$abi/
+          done
+      - name: Build APK and create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.inputs.tag || 'v2.0.39-transport' }}"
+          mkdir -p app/libs
+          cp mitm/mitm.aar app/libs/mitm.aar
+          gradle assembleRelease
+          TAG="${{ github.event.inputs.tag }}"
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          gh release create "$TAG" "$APK" --title "$TAG" --notes "Сборка ветки transport-core-v2. Иконка: белый щит уменьшен на 18%." --repo gennadyevt-bot/ConfigAdBlock || \
-          gh release upload "$TAG" "$APK" --repo gennadyevt-bot/ConfigAdBlock --clobber
+          gh release create "$TAG" "$APK"             --title "$TAG"             --notes "Сборка ветки transport-core-v2. Иконка: белый щит уменьшен на 18%."             --repo gennadyevt-bot/ConfigAdBlock             || gh release upload "$TAG" "$APK" --repo gennadyevt-bot/ConfigAdBlock --clobber
