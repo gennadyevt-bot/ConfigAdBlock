@@ -1,0 +1,39 @@
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag"
+        required: true
+        default: "v2.0.39-transport"
+  push:
+    branches: [ transport-core-v2 ]
+    paths: [ '.github/workflows/release-apk.yml' ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: transport-core-v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+      - name: Create release with APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || 'v2.0.39-transport' }}"
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          gh release create "$TAG" "$APK" --title "$TAG" --notes "Сборка ветки transport-core-v2. Иконка: белый щит уменьшен на 18%." --repo gennadyevt-bot/ConfigAdBlock || \
+          gh release upload "$TAG" "$APK" --repo gennadyevt-bot/ConfigAdBlock --clobber
