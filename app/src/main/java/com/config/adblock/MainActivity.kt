@@ -40,6 +40,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         prefs = getSharedPreferences("stats", MODE_PRIVATE)
+        // 242: принудительные production-настройки. Пользовательский UI не должен
+        // случайно запускать DNS_ONLY/empty-режимы; диагностические runFilter/
+        // runEmptyVpn остаются в коде сервиса, но недостижимы из обычного UI.
+        prefs.edit()
+            .putBoolean("https_mode", true)
+            .putBoolean("browsers_only", true)
+            .putBoolean("no_mitm", false)
+            .putBoolean("empty_vpn", false)
+            .apply()
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         findViewById<TextView>(R.id.tvVersion).text = "v" + ver
         setupExpandableSections()
@@ -55,11 +64,9 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putString("ping", pingRes).apply()
         }
         val chk = findViewById<MaterialCheckBox>(R.id.chkHttps)
-        chk.isChecked = prefs.getBoolean("https_mode", false)
-        chk.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean("https_mode", isChecked).apply()
-            Toast.makeText(this, if (isChecked) "HTTPS-режим: реклама режется внутри трафика. Требуется сертификат (кнопка ниже)." else "Обычный DNS-режим", Toast.LENGTH_LONG).show()
-        }
+        chk.isChecked = true
+        chk.visibility = android.view.View.GONE
+        prefs.edit().putBoolean("https_mode", true).apply()
         findViewById<MaterialButton>(R.id.btnCert).setOnClickListener { installCert() }
         val chkNoMitm = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkNoMitm)
         prefs.edit().putBoolean("no_mitm", false).apply()
@@ -68,17 +75,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
         findViewById<MaterialButton>(R.id.btnResetCa).setOnClickListener { resetCa() }
         val chkBr = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkBrowsers)
-        chkBr.isChecked = prefs.getBoolean("browsers_only", true)
-        chkBr.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean("browsers_only", isChecked).apply()
-            Toast.makeText(this, if (isChecked) "Режим: фильтруем только Chrome/Яндекс, остальное работает как обычно" else "Режим: все приложения через фильтр", Toast.LENGTH_LONG).show()
-        }
+        chkBr.isChecked = true
+        chkBr.visibility = android.view.View.GONE
+        prefs.edit().putBoolean("browsers_only", true).apply()
         val chkEmpty = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkEmpty)
-        chkEmpty.isChecked = prefs.getBoolean("empty_vpn", false)
-        chkEmpty.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean("empty_vpn", isChecked).apply()
-            Toast.makeText(this, if (isChecked) "Пустой туннель: только VPN, без движка (диагностика)" else "Обычный режим", Toast.LENGTH_LONG).show()
-        }
+        chkEmpty.isChecked = false
+        chkEmpty.visibility = android.view.View.GONE
+        prefs.edit().putBoolean("empty_vpn", false).apply()
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -286,7 +289,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startFilter() {
         val i = Intent(this, FilterService::class.java)
-        i.putExtra("https", prefs.getBoolean("https_mode", false))
+        i.putExtra("https", true)
         try {
             startForegroundService(i)
             logClick("сервис запущен")
