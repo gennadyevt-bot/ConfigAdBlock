@@ -334,15 +334,15 @@ func TestBlock4RealHosts(t *testing.T) {
 
 // Block 5: новые root rules + cosmetic rules
 func TestBlock5NewRoots(t *testing.T) {
-	blMu.Lock()
+	blockedMu.Lock()
 	savedD := blockedDomains
 	savedP := blockedPaths
-	blMu.Unlock()
+	blockedMu.Unlock()
 	defer func() {
-		blMu.Lock()
+		blockedMu.Lock()
 		blockedDomains = savedD
 		blockedPaths = savedP
-		blMu.Unlock()
+		blockedMu.Unlock()
 	}()
 
 	tmp, _ := os.CreateTemp("", "bl5_*.txt")
