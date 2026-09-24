@@ -1596,7 +1596,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		return false, false
 	}
 	// 4) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
-	if alpn := peekClientHelloALPN(raw); alpn != "" && alpn != "http/1.1" && alpn != "" {
+	if alpn := peekClientHelloALPN(raw); alpn != "" && alpn != "http/1.1" {
 		atomic.AddInt64(&genericDirectBypassN, 1)
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=alpn:" + alpn)
 		return false, false
