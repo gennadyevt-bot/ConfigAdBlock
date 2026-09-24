@@ -331,3 +331,68 @@ func TestBlock4RealHosts(t *testing.T) {
 		}
 	}
 }
+
+// Block 5: новые root rules + cosmetic rules
+func TestBlock5NewRoots(t *testing.T) {
+	blMu.Lock()
+	savedD := blockedDomains
+	savedP := blockedPaths
+	blMu.Unlock()
+	defer func() {
+		blMu.Lock()
+		blockedDomains = savedD
+		blockedPaths = savedP
+		blMu.Unlock()
+	}()
+
+	tmp, _ := os.CreateTemp("", "bl5_*.txt")
+	defer os.Remove(tmp.Name())
+	tmp.WriteString(`0.0.0.0 googletagservices.com
+0.0.0.0 adservices.google.com
+0.0.0.0 mytarget.ru
+0.0.0.0 ironsrc.com
+0.0.0.0 ironsrc.mobi
+0.0.0.0 chartboost.com`)
+	tmp.Close()
+	loadBlocklist(tmp.Name())
+
+	roots := []string{
+		"googletagservices.com", "adservices.google.com", "mytarget.ru",
+		"ironsrc.com", "ironsrc.mobi", "chartboost.com",
+	}
+	for _, r := range roots {
+		if b, _ := checkURL(r, "/"); !b {
+			t.Errorf("root %s not blocked", r)
+		}
+		if b, _ := checkURL("sub."+r, "/"); !b {
+			t.Errorf("subdomain of %s not blocked", r)
+		}
+	}
+	if b, _ := checkURL("other.com", "/"); b {
+		t.Error("unrelated domain wrongly blocked")
+	}
+}
+
+func TestBlock5CosmeticSelectors(t *testing.T) {
+	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
+	if err != nil { t.Skip("no asset") }
+	s := string(data)
+	must := []string{
+		"[data-google-query-id]", `[data-ad-status="filled"]`,
+		`[name^="google_ads_iframe_"]`,
+		`iframe[src*="googlesyndication.com"]`,
+		`iframe[src*="doubleclick.net"]`,
+		`iframe[src*="adfox.ru"]`,
+	}
+	for _, m := range must {
+		if !strings.Contains(s, m) {
+			t.Errorf("missing selector: %s", m)
+		}
+	}
+	// запрещённых broad selectors по-прежнему нет
+	for _, bad := range []string{`class*=ad]`, `id*=ad]`, `class*=banner]`, `class*=promo]`} {
+		if strings.Contains(s, bad) {
+			t.Errorf("broad selector found: %s", bad)
+		}
+	}
+}
