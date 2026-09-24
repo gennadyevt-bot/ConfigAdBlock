@@ -3,6 +3,7 @@ package mitm
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,27 @@ import (
 
 // assetDir — путь к assets (выставляется из JNI при старте движка)
 var assetDir string
+
+// extractSelectors - парсинг generic_cosmetic_rules.txt в список CSS selectors
+func extractSelectors(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, "generic_cosmetic_rules.txt"))
+	if err != nil {
+		return nil
+	}
+	var sel []string
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "!") {
+			continue
+		}
+		if strings.Contains(l, "##") {
+			sel = append(sel, strings.SplitN(l, "##", 2)[1])
+		} else {
+			sel = append(sel, l)
+		}
+	}
+	return sel
+}
 
 // SetAssetDir вызывается из Java перед стартом фильтрации
 func SetAssetDir(dir string) {
