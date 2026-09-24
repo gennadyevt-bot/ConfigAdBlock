@@ -64,7 +64,8 @@ class FilterService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") {
-            saveErr("SVC получен STOP")
+            val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+            saveErr("STOP_RECEIVED startId=" + startId + " time=" + t)
             running = false
             isRunning = false
             thread {

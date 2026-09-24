@@ -390,15 +390,17 @@ class MainActivity : AppCompatActivity() {
             running -> "● работает"
             else -> "○ выключен"
         }
+        // Universal V1 fix: generic counters из flowlog (Go пишет туда), не из log
+        val flowTxt = prefs.getString("flowlog", "") ?: ""
         val logTxt = prefs.getString("log", "") ?: ""
-        val gOK = logTxt.lines().count { it.contains("GENERIC_MITM_OK") }
-        val gFail = logTxt.lines().count { it.contains("GENERIC_MITM_FAIL") }
-        val gHTML = logTxt.lines().count { it.contains("GENERIC_HTML_FILTERED") }
-        val gBypass = logTxt.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
-        val gBlocked = logTxt.lines().count { it.contains("GENERIC_BLOCKED") }
+        val gOK = flowTxt.lines().count { it.contains("GENERIC_MITM_OK") }
+        val gFail = flowTxt.lines().count { it.contains("GENERIC_MITM_FAIL") }
+        val gHTML = flowTxt.lines().count { it.contains("GENERIC_HTML_FILTERED") }
+        val gBypass = flowTxt.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
+        val gBlocked = flowTxt.lines().count { it.contains("GENERIC_BLOCKED") }
         val rulesCount = logTxt.lines().count { it.contains("YANDEX_CB_RULES_READY") }
         val rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
-        val genericStatus = if (gOK > 0) "● работает (MITM " + gOK + ", HTML " + gHTML + ")" else if (gBypass > 0) "○ bypass " + gBypass else "○ ожидание"
+        val genericStatus = "OK=" + gOK + " FAIL=" + gFail + " HTML=" + gHTML + " BYPASS=" + gBypass + " BLOCK=" + gBlocked
         stateHint.text = when {
             running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат (кнопка в настройках)."
             running && caMissing -> "Установите сертификат Config AdBlock — без него HTTPS-реклама не блокируется."
@@ -534,11 +536,11 @@ class MainActivity : AppCompatActivity() {
             when (ev.action) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                    prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_TOUCH_DOWN " + t).apply()
+                    logClick("TOGGLE_TOUCH_DOWN " + t)
                 }
                 android.view.MotionEvent.ACTION_UP -> {
                     val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                    prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_TOUCH_UP " + t).apply()
+                    logClick("TOGGLE_TOUCH_UP " + t)
                 }
             }
             false
@@ -547,13 +549,13 @@ class MainActivity : AppCompatActivity() {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
             val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-            prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_CLICK " + t + " running=" + FilterService.isRunning).apply()
+            logClick("TOGGLE_CLICK " + t + " running=" + FilterService.isRunning)
             if (FilterService.isRunning) {
                 saveStopToLog()
                 val si = Intent(this, FilterService::class.java)
                 si.action = "STOP"
                 val t2 = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_STOP_SEND " + t2).apply()
+                logClick("TOGGLE_STOP_SEND " + t2)
                 startService(si)
                 FilterService.isRunning = false
                 btn.postDelayed({ updateUi() }, 400)
