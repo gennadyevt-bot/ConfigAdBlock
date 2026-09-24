@@ -1546,12 +1546,29 @@ func isDoHHost(host string) bool {
 	return false
 }
 
+// isGoogleAdsHost - рекламные домены Google, которые НЕ должны быть pinned
+func isGoogleAdsHost(host string) bool {
+	h := strings.ToLower(host)
+	for _, d := range []string{
+		"googlesyndication.com", "doubleclick.net", "googleadservices.com",
+		"googletagservices.com", "adservice.google.com", "ads.google.com",
+		"pagead2.googlesyndication.com", "tpc.googlesyndication.com",
+		"adservices.google.com", "google-analytics.com", "googletagmanager.com",
+	} {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPinnedHost - известные pinning/h2-only хосты, не делаем MITM
 func isPinnedHost(host string) bool {
 	h := strings.ToLower(host)
 	for _, d := range []string{
+		// Рекламные домены Google НЕ pinned — их фильтруем через blocklist
 		"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com",
-		"googlevideo.com", "youtube.com", "ytimg.com",
+		"youtube.com", "ytimg.com",
 		"facebook.com", "fbcdn.net", "instagram.com", "cdninstagram.com",
 		"twitter.com", "twimg.com", "x.com",
 		"whatsapp.net", "whatsapp.com", "telegram.org", "t.me",
@@ -1590,7 +1607,10 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		return false, false
 	}
 	// 3) Pinned/h2-only - не делаем MITM
-	if isPinnedHost(sni) {
+	// Рекламные домены Google — НЕ pinned, фильтруем через blocklist
+	if isGoogleAdsHost(sni) {
+		// не pinned, идём дальше к MITM/blocklist
+	} else if isPinnedHost(sni) {
 		atomic.AddInt64(&genericDirectBypassN, 1)
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=pinned")
 		return false, false
