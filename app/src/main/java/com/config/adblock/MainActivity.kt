@@ -483,7 +483,10 @@ class MainActivity : AppCompatActivity() {
         val fl = prefs.getString("flowlog", "") ?: ""
         val vpna = prefs.getString("vpn_alive", "") ?: ""
         val ping = prefs.getString("ping", "") ?: ""
-        err.text = when {
+        // fix scroll: сохраняем scrollY, не присваиваем если текст совпадает
+        val mainScroll = findViewById<android.widget.ScrollView>(R.id.mainScroll)
+        val savedY = mainScroll?.scrollY ?: 0
+        val newErrText = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
                 // ВАЖНО: никаких прямых вызовов mitm.* здесь — только prefs.
@@ -494,6 +497,10 @@ class MainActivity : AppCompatActivity() {
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
             else -> (if (ping.isNotEmpty()) ping + "\n" else "") + "Последнее: " + lasterr + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "") + "\n\nЖурнал:\n" + logText
+        }
+        if (err.text.toString() != newErrText) {
+            err.text = newErrText
+            mainScroll?.post { mainScroll.scrollTo(0, savedY) }
         }
         if (modeline == "MODE=HEV_DNS_SNI") {
             // 2.0.8: всегда показываем хвост flowlog — один тест на Дзене
