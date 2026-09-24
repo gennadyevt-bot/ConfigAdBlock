@@ -5,33 +5,44 @@ import (
 	"compress/gzip"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// Стили + скрипт, вырезающие баннерные блоки, которые подгрузились с
-// "своих" доменов новостных сайтов (lenta/rambler/gazeta подают часть
-// рекламы с основных доменов — режем по селекторам).
-var cosmeticInject = []byte(`<style>
-[id*="adfox"],[class*="adfox"],[id*="AdFox"],[class*="AdFox"],
-[id*="yandex_direct"],[class*="yandex_direct"],[class*="yandex-direct"],[class*="YaDirect"],
-[class*="adsbygoogle"],[id*="google_ads"],[class*="banner"],[id*="banner"],[class*="Banner"],[id*="Banner"],
-[class*="ads_"],[id*="ads_"],[class*="-ads"],[class*=" ad-"],[id*=" ad-"],
-[data-marker="advert"],[data-testid*="advert"],[data-testid*="ad-"],
-[class*="promo-block"],[class*="Promo"],[id*="promo"],
-[class*="rnet"],[class*="r-ads"],[class*="r-banner"],[id*="r-banner"],
-[aria-label*="реклам"],[class*="ad-slot"],[id*="ad-slot"],[class*="adunit"],[id*="adunit"],
-[class*="commercial"],[id*="commercial"],[class*="sponsor"],[id*="sponsor"],
-	/* Дзен: нативные рекламные карточки */
-	[data-ad-type="direct"],
-	[data-ad-type="banner"],
-	div[aria-label="Лента Дзена"] article:has(> div[data-ad-type="direct"]),
-	div[id^="ad-"][class*="__isStretched"],
-	div[class*="MyTargetAdvert"],
-	div[data-testid="bottom-ad"],
-	div[class*="__advertItem "]
-{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}
-</style><script>(function(){function k(){document.querySelectorAll('[id*="adfox"],[class*="adfox"],[class*="yandex_direct"],[class*="yandex-direct"],[class*="adsbygoogle"],[class*="banner"],[id*="banner"],[class*="-ads"],[class*=" ad-"],[data-marker="advert"],[class*="promo-block"],[class*="commercial"],[class*="rnet"],[class*="r-ads"],[aria-label*="реклам"],[data-ad-type="direct"],[data-ad-type="banner"],div[id^="ad-"][class*="__isStretched"],div[class*="MyTargetAdvert"],div[data-testid="bottom-ad"],div[class*="__advertItem "]').forEach(function(e){e.style.display="none";e.style.height="0";e.style.overflow="hidden"})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>`)
+// assetDir — путь к assets (выставляется из JNI при старте движка)
+var assetDir string
+
+// SetAssetDir вызывается из Java перед стартом фильтрации
+func SetAssetDir(dir string) { assetDir = dir; cosmeticInject = buildCosmeticInject() }
+
+// cosmeticInject собирается из assets/generic_cosmetic_rules.txt (universal V1).
+// Опасные глобальные селекторы [class*=banner]/[id*=banner]/[class*=ad]/[class*=promo]
+// удалены — они ломали обычные сайты.
+var cosmeticInject = buildCosmeticInject()
+
+func buildCosmeticInject() []byte {
+	data, err := os.ReadFile(filepath.Join(assetDir, "generic_cosmetic_rules.txt"))
+	if err != nil || len(data) == 0 {
+		// fallback: только безопасные
+		data = []byte("[data-ad-client]\n[data-ad-slot]\n[class*=\"adfox\"]\n[id*=\"adfox\"]\n[class*=\"adsbygoogle\"]\n[data-testid*=\"advert\"]\n[data-marker=\"advert\"]")
+	}
+	var sel []string
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "!") {
+			continue
+		}
+		if strings.Contains(l, "##") {
+			sel = append(sel, strings.SplitN(l, "##", 2)[1])
+		}
+	}
+	css := strings.Join(sel, ",")
+	jsSel := strings.Join(sel, ",")
+	inject := "<style>" + css + "{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}</style><script>(function(){function k(){document.querySelectorAll('" + jsSel + "').forEach(function(e){e.style.display='none';e.style.height='0';e.style.overflow='hidden'})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>"
+	return []byte(inject)
+}
 
 // filterHTML: text/html -> вставляем косметику после <head>.
 // Сжатие (gzip) прозрачно распаковывается и упаковывается обратно.

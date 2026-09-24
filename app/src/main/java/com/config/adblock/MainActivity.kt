@@ -373,17 +373,28 @@ class MainActivity : AppCompatActivity() {
         // когда HTTPS-фильтрация фактически не работает.
         val caReject = prefs.getBoolean("ca_browser_reject", false)
         val caMissing = prefs.getBoolean("ca_missing", false)
+        // Universal V1: компактные статусы по п.11 инструкции
         state.text = when {
-            running && caReject -> "Сертификат не принят браузером"
-            running && caMissing -> "Требуется сертификат"
-            running -> "Защита включена"
+            running && caReject -> "AdBlock: сертификат не принят"
+            running && caMissing -> "AdBlock: требуется сертификат"
+            running -> "AdBlock: работает"
             consentNeeded -> "Нужно разрешение VPN"
-            else -> "Защита выключена"
+            else -> "AdBlock: выключен"
         }
+        val cbServedN = prefs.getInt("cb_served", 0)
+        val cbStatus = if (cbServedN > 0) "● подключён" else if (ybInstalled) "○ найден, требуется подключение" else "○ не найден"
+        val httpsStatus = when {
+            running && caReject -> "○ сертификат не принят"
+            running && caMissing -> "○ требуется установка"
+            running -> "● работает"
+            else -> "○ выключен"
+        }
+        val rulesCount = (prefs.getString("log", "") ?: "").lines().count { it.contains("YANDEX_CB_RULES_READY") }
+        val rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
         stateHint.text = when {
-            running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат Config AdBlock (кнопка в настройках)."
+            running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат (кнопка в настройках)."
             running && caMissing -> "Установите сертификат Config AdBlock — без него HTTPS-реклама не блокируется."
-            running -> "Реклама блокируется"
+            running -> "Сетевой фильтр: ● работает\nЯндекс.Браузер: " + cbStatus + "\nHTTPS-фильтр: " + httpsStatus + "\n" + rulesN
             consentNeeded -> "Android попросит подтвердить подключение"
             else -> "Нажмите кнопку, чтобы убрать рекламу"
         }

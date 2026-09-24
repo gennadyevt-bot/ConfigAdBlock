@@ -3,6 +3,13 @@
 // Blocklist (domains) + cosmetic (CSS/JS) filtering in OnRequest/OnResponse.
 package mitm
 
+// Universal V1: счётчики фильтрации
+var blockedCount int64
+var bypassedCount int64
+var htmlFilteredCount int64
+var cosmeticInjectedCount int64
+
+
 import (
 	"bufio"
 	"crypto/tls"
@@ -246,7 +253,10 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		if isDzenHost(req.URL.Hostname()) {
 			req.Header.Set("Accept-Encoding", "identity")
 		}
-		if isBlocked(req.Host) {
+		blocked, rule := checkURL(req.URL.Hostname(), req.URL.Path)
+		if isBlocked(req.Host) || blocked {
+			blockedCount++
+			flowLog("HTTP_BLOCKED host=" + req.URL.Hostname() + " rule=" + rule)
 			// Пустой 403: баннер/скрипт не загрузится, страница не сломается
 			return req, goproxy.NewResponse(req, "text/html", http.StatusForbidden, "")
 		}
@@ -258,6 +268,10 @@ func StartProxy(filesDir string, blocklistPath string) error {
 		if ctx != nil && ctx.Req != nil && isDzenHost(ctx.Req.URL.Hostname()) {
 			resp.Header.Del("Content-Security-Policy")
 			resp.Header.Del("Content-Security-Policy-Report-Only")
+		}
+		if isHTML(resp) {
+			htmlFilteredCount++
+			flowLog("HTML_FILTERED " + resp.Request.Host + resp.Request.URL.Path)
 		}
 		return filterHTML(resp)
 	})

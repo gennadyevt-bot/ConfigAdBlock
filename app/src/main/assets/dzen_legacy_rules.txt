@@ -1,0 +1,61 @@
+[Adblock Plus 2.0]
+! ConfigAdBlock content blocker filters (Yandex Browser / Samsung Internet)
+! Доставляется через Content Blocker API - без MITM, без VPN, без CA.
+
+! --- dzen.ru: нативные рекламные карточки ---
+dzen.ru##[data-ad-type="direct"]
+dzen.ru##[data-ad-type="banner"]
+dzen.ru##[data-ad-type="rtb"]
+dzen.ru##.card-rtb
+dzen.ru##[class*="adBox"]
+dzen.ru##[class*="MyTargetAdvert"]
+dzen.ru##[class*="advertItem"]
+dzen.ru##[data-testid="bottom-ad"]
+www.dzen.ru##[data-ad-type="direct"]
+www.dzen.ru##[data-ad-type="banner"]
+www.dzen.ru##[data-ad-type="rtb"]
+www.dzen.ru##.card-rtb
+www.dzen.ru##[class*="adBox"]
+www.dzen.ru##[class*="MyTargetAdvert"]
+www.dzen.ru##[class*="advertItem"]
+www.dzen.ru##[data-testid="bottom-ad"]
+m.dzen.ru##[data-ad-type="direct"]
+m.dzen.ru##[data-ad-type="banner"]
+m.dzen.ru##[data-ad-type="rtb"]
+m.dzen.ru##.card-rtb
+m.dzen.ru##[class*="adBox"]
+m.dzen.ru##[class*="MyTargetAdvert"]
+m.dzen.ru##[class*="advertItem"]
+m.dzen.ru##[data-testid="bottom-ad"]
+
+! --- сетевые правила ---
+||doubleclick.net^
+||googlesyndication.com^
+||ads.adfox.ru^
+||an.yandex.ru^
+
+! --- 223: верхний мобильный баннер (AdGuard Android filters) ---
+dzen.ru##div[class*="topContent"][class*="mobile__hasBanner"]
+dzen.ru##div[class*="news"] > div[class*="_banner_"]
+dzen.ru##.zenad-card-rtb
+dzen.ru##.news-mt-advert
+dzen.ru##.mg-advert > div[class*="loader"]
+dzen.ru##div[class*="Advert_"]
+www.dzen.ru##div[class*="topContent"][class*="mobile__hasBanner"]
+www.dzen.ru##div[class*="news"] > div[class*="_banner_"]
+www.dzen.ru##.zenad-card-rtb
+www.dzen.ru##.news-mt-advert
+www.dzen.ru##.mg-advert > div[class*="loader"]
+www.dzen.ru##div[class*="Advert_"]
+m.dzen.ru##div[class*="Advert_"]
+
+! --- 224: внешние рекламные оболочки / skeleton ---
+dzen.ru##div[class^="BrandingAdvert"]
+dzen.ru##.news-advert-column
+dzen.ru##.article-render-mobile__embed_embed-type_yandex-direct
+dzen.ru##.news-app__content div[class*="__column_myTarget mg-grid__item"] div[class*="__loader "]
+www.dzen.ru##div[class^="BrandingAdvert"]
+www.dzen.ru##.news-advert-column
+www.dzen.ru##.article-render-mobile__embed_embed-type_yandex-direct
+m.dzen.ru##div[class^="BrandingAdvert"]
+m.dzen.ru##.news-advert-column

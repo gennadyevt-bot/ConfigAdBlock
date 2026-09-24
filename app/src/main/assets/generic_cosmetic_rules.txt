@@ -1,0 +1,18 @@
+! Generic cosmetic rules — только безопасные селекторы (без banner/ad/promo шаблонов)
+! Загружаются из asset вместо hardcoded списка в cosmetic.go
+[data-ad-client]
+[data-ad-slot]
+[data-ad-unit]
+[data-ad-module]
+[data-adblockkey]
+[class*="adfox"]
+[id*="adfox"]
+[data-adfox]
+[class*="adsbygoogle"]
+[id*="google_ads"]
+[data-testid*="advert"]
+[data-testid*="banner"]
+[data-marker="advert"]
+[class*="MyTarget"]
+[id*="yandex-direct"]
+[data-label="Реклама"]

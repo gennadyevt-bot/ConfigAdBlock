@@ -85,6 +85,8 @@ class FilterService : VpnService() {
         if (!isRunning) {
             running = true
             isRunning = true
+            // Universal V1: выставляем путь к assets для Go (cosmetic rules)
+            runCatching { mitm.Mitm.setAssetDir(filesDir.absolutePath) }
             thread { if (emptyMode) runEmptyVpn() else if (httpsMode) runHevTransport() else runFilter() }
         }
         return START_NOT_STICKY
