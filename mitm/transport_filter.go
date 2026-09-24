@@ -12,12 +12,15 @@ import (
 var transportDNSWorkers = make(chan struct{}, 32)
 var transportFiltering int32
 var transportBlocked, transportDNS, transportErrors, transportQUIC int64
+var transportDNSResolveErr, transportDNSOverflowErr int64
 
 func ConfigureTransportFilter(path string) {
 	loadBlocklist(path)
 	atomic.StoreInt64(&transportBlocked, 0)
 	atomic.StoreInt64(&transportDNS, 0)
 	atomic.StoreInt64(&transportErrors, 0)
+	atomic.StoreInt64(&transportDNSResolveErr, 0)
+	atomic.StoreInt64(&transportDNSOverflowErr, 0)
 	atomic.StoreInt64(&transportQUIC, 0)
 	atomic.StoreInt64(&localSocksTCPN, 0)
 	atomic.StoreInt64(&localSocksUDPN, 0)
@@ -38,11 +41,33 @@ func transportDNSReply(q []byte) []byte {
 	}
 	ans, err := resolveDNS(q)
 	if err != nil {
-		atomic.AddInt64(&transportErrors, 1)
+		atomic.AddInt64(&transportDNSResolveErr, 1)
+		flowLog(fmt.Sprintf("DNS_RESOLVE_ERR host=%s err=%v", extractDNSName(q), err))
 		return transportDNSError(q, 2)
 	}
 	return ans
 }
+// extractDNSName - извлечь QNAME из DNS-запроса для логов
+func extractDNSName(q []byte) string {
+	if len(q) < 13 {
+		return ""
+	}
+	var sb strings.Builder
+	i := 12
+	for i < len(q) && q[i] != 0 {
+		l := int(q[i])
+		if l&0xC0 != 0 || i+1+l > len(q) {
+			break
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte('.')
+		}
+		sb.Write(q[i+1 : i+1+l])
+		i += l + 1
+	}
+	return sb.String()
+}
+
 func transportDNSError(q []byte, code byte) []byte {
 	if len(q) < 12 {
 		return nil

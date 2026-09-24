@@ -44,10 +44,12 @@ object CaDiagnostics {
             }
         } catch (_: Exception) {}
         val engineFp = try { mitm.Mitm.activeCAFingerprint() } catch (e: Exception) { "" }
+        // case-insensitive compare: Go activeCAFingerprint() uppercase, sha256Hex() lowercase
+        val engineFpLower = engineFp.lowercase()
         return CaStatus(
             fileExists = fileExists,
             installedExact = installedExact,
-            engineMatchesFile = engineFp.isNotEmpty() && engineFp == fp,
+            engineMatchesFile = engineFpLower.isNotEmpty() && engineFpLower == fp,
             fingerprint = fp,
             olderSameName = older
         )

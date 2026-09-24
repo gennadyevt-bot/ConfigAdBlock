@@ -529,13 +529,31 @@ class MainActivity : AppCompatActivity() {
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
         if (modeline == "MODE=HEV_DNS_SNI") stats.text = "Тестовая 2.0 • статистика текущего запуска"
+        // Universal V1: touch/click diagnostics для доказательства STOP origin
+        btn.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                    prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_TOUCH_DOWN " + t).apply()
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                    prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_TOUCH_UP " + t).apply()
+                }
+            }
+            false
+        }
         btn.setOnClickListener {
             btn.isEnabled = false
             btn.postDelayed({ btn.isEnabled = true }, 800)
+            val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+            prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_CLICK " + t + " running=" + FilterService.isRunning).apply()
             if (FilterService.isRunning) {
                 saveStopToLog()
                 val si = Intent(this, FilterService::class.java)
                 si.action = "STOP"
+                val t2 = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                prefs.edit().putString("toggle_diag", (prefs.getString("toggle_diag","") ?: "") + "\nTOGGLE_STOP_SEND " + t2).apply()
                 startService(si)
                 FilterService.isRunning = false
                 btn.postDelayed({ updateUi() }, 400)

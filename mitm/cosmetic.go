@@ -15,7 +15,15 @@ import (
 var assetDir string
 
 // SetAssetDir вызывается из Java перед стартом фильтрации
-func SetAssetDir(dir string) { assetDir = dir; cosmeticInject = buildCosmeticInject() }
+func SetAssetDir(dir string) {
+	assetDir = dir
+	cosmeticInject = buildCosmeticInject()
+	count := len(extractSelectors(assetDir))
+	if count == 0 {
+		count = 6 // fallback
+	}
+	flowLog(fmt.Sprintf("GENERIC_COSMETIC_RULES count=%d", count))
+}
 
 // cosmeticInject собирается из assets/generic_cosmetic_rules.txt (universal V1).
 // Опасные глобальные селекторы [class*=banner]/[id*=banner]/[class*=ad]/[class*=promo]
@@ -34,10 +42,21 @@ func buildCosmeticInject() []byte {
 		if l == "" || strings.HasPrefix(l, "!") {
 			continue
 		}
+		// domain##selector или ##selector -> берём selector
 		if strings.Contains(l, "##") {
-			sel = append(sel, strings.SplitN(l, "##", 2)[1])
+			parts := strings.SplitN(l, "##", 2)
+			sel = append(sel, parts[1])
+		} else {
+			// обычный CSS selector (например [data-ad-client])
+			sel = append(sel, l)
 		}
 	}
+	// safe fallback: если после parsing selectors=0, используем безопасный минимум
+	if len(sel) == 0 {
+		sel = []string{"[data-ad-client]", "[data-ad-slot]", "[class*=\"adfox\"]", "[class*=\"adsbygoogle\"]", "[data-testid*=\"advert\"]", "[data-marker=\"advert\"]"}
+	}
+	printGenericCosmeticCount := true
+	_ = printGenericCosmeticCount
 	css := strings.Join(sel, ",")
 	jsSel := strings.Join(sel, ",")
 	inject := "<style>" + css + "{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}</style><script>(function(){function k(){document.querySelectorAll('" + jsSel + "').forEach(function(e){e.style.display='none';e.style.height='0';e.style.overflow='hidden'})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>"

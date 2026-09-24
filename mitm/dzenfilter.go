@@ -1616,7 +1616,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		return false, false
 	}
 	// 4) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
-	if alpn := peekClientHelloALPN(raw); alpn != "" && alpn != "http/1.1" {
+	if alpn := peekClientHelloALPN(raw); alpn == "h2" {
 		atomic.AddInt64(&genericDirectBypassN, 1)
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=alpn:" + alpn)
 		return false, false
@@ -1725,23 +1725,96 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	}
 }
 
-// peekClientHelloALPN - извлекает ALPN из raw ClientHello (упрощённо)
+// peekClientHelloALPN - правильный разбор ALPN extension из ClientHello.
+// Возвращает "http/1.1" если ALPN содержит http/1.1 (даже вместе с h2),
+// "h2" если только h2, "" если ALPN нет или parse fail.
+// Наш MITM умеет http/1.1 -> если http/1.1 среди ALPN, MITM разрешён.
 func peekClientHelloALPN(raw []byte) string {
-	// Поиск "h2" или "http/1.1" в raw bytes
-	if len(raw) < 10 {
+	// Минимальная длина ClientHello: 5 (record) + 4 (hs) + 2 (ver) + 32 (random) + 1 (sid len)
+	if len(raw) < 60 {
 		return ""
 	}
-	// Простой поиск: если находим "h2\x00" или "h2," раньше "http/1.1"
-	h2Idx := indexOf(raw, []byte("h2\x00"))
-	h2Idx2 := indexOf(raw, []byte("h2,"))
-	httpIdx := indexOf(raw, []byte("http/1.1"))
-	if h2Idx >= 0 || h2Idx2 >= 0 {
-		if httpIdx < 0 || (h2Idx >= 0 && h2Idx < httpIdx) || (h2Idx2 >= 0 && h2Idx2 < httpIdx) {
-			return "h2"
+	// Найти handshake message (type=1) внутри TLS record
+	hs := raw[5:]
+	if len(hs) < 4 || hs[0] != 1 {
+		return ""
+	}
+	// Skip: 4 bytes header + 2 version + 32 random + 1 sidLen + sid + 2 ciphersLen + ciphers + 1 compLen + comp
+	pos := 4 + 2 + 32
+	if pos >= len(hs) {
+		return ""
+	}
+	sidLen := int(hs[pos])
+	pos += 1 + sidLen
+	if pos+2 > len(hs) {
+		return ""
+	}
+	ciphersLen := int(hs[pos])<<8 | int(hs[pos+1])
+	pos += 2 + ciphersLen
+	if pos >= len(hs) {
+		return ""
+	}
+	compLen := int(hs[pos])
+	pos += 1 + compLen
+	// Extensions
+	if pos+2 > len(hs) {
+		return ""
+	}
+	extTotal := int(hs[pos])<<8 | int(hs[pos+1])
+	pos += 2
+	extEnd := pos + extTotal
+	if extEnd > len(hs) {
+		extEnd = len(hs)
+	}
+	for pos+4 <= extEnd {
+		extType := int(hs[pos])<<8 | int(hs[pos+1])
+		extLen := int(hs[pos+2])<<8 | int(hs[pos+3])
+		pos += 4
+		if extType == 16 {
+			// ALPN extension
+			return parseALPNList(hs[pos : pos+extLen])
+		}
+		pos += extLen
+	}
+	return ""
+}
+
+// parseALPNList - разбор ALPN protocol list: 2 bytes listLen + entries (1 byte len + bytes)
+// Возвращает "http/1.1" если найден, "h2" если только h2, "" если ничего
+func parseALPNList(b []byte) string {
+	if len(b) < 2 {
+		return ""
+	}
+	listLen := int(b[0])<<8 | int(b[1])
+	pos := 2
+	end := pos + listLen
+	if end > len(b) {
+		end = len(b)
+	}
+	hasH2 := false
+	hasHttp11 := false
+	for pos < end {
+		if pos >= len(b) {
+			break
+		}
+		protoLen := int(b[pos])
+		pos++
+		if pos+protoLen > end || pos+protoLen > len(b) {
+			break
+		}
+		proto := string(b[pos : pos+protoLen])
+		pos += protoLen
+		if proto == "h2" {
+			hasH2 = true
+		} else if proto == "http/1.1" {
+			hasHttp11 = true
 		}
 	}
-	if httpIdx >= 0 {
+	if hasHttp11 {
 		return "http/1.1"
+	}
+	if hasH2 {
+		return "h2"
 	}
 	return ""
 }
