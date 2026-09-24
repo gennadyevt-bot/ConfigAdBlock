@@ -81,7 +81,49 @@ func buildCosmeticInject() []byte {
 	_ = printGenericCosmeticCount
 	css := strings.Join(sel, ",")
 	jsSel := strings.Join(sel, ",")
-	inject := "<style>" + css + "{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}</style><script>(function(){function k(){document.querySelectorAll('" + jsSel + "').forEach(function(e){e.style.display='none';e.style.height='0';e.style.overflow='hidden'})}k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true})})();</script>"
+	// Universal Filter Pack: MutationObserver — только addedNodes, не весь document
+	js := `<script>(function(){
+var SELS='` + jsSel + `';
+var MARKS=['Реклама','Рекламное объявление','Advertisement','Sponsored'];
+function hide(el){if(!el||!el.style)return;el.style.display='none';el.style.height='0';el.style.overflow='hidden';}
+function hideSel(root){if(!root.querySelectorAll)return;var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++)hide(els[i]);}
+function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
+function findMark(root){
+	if(!root||!root.querySelectorAll)return;
+	var texts=root.querySelectorAll('span,div,p,a,small,em,i,b,strong,label,button');
+	for(var i=0;i<texts.length;i++){
+		var t=norm(texts[i].textContent);
+		if(MARKS.indexOf(t)<0)continue;
+		var el=texts[i];
+		for(var up=0;up<8&&el.parentElement;up++){
+			el=el.parentElement;
+			var tag=(el.tagName||'').toUpperCase();
+			if(tag==='BODY'||tag==='HTML'||tag==='MAIN'||tag==='ARTICLE')return;
+			var r=el.getBoundingClientRect();
+			if(r.width<200&&r.height<100){hide(el);return;}
+		}
+	}
+}
+function scan(root){hideSel(root);findMark(root);}
+// один полный проход при старте
+scan(document.documentElement);
+// дальше только addedNodes
+var obs=new MutationObserver(function(muts){
+	for(var m=0;m<muts.length;m++){
+		var nodes=muts[m].addedNodes;
+		if(!nodes)continue;
+		for(var n=0;n<nodes.length;n++){
+			scan(nodes[n]);
+			if(nodes[n].querySelectorAll){
+				var desc=nodes[n].querySelectorAll('*');
+				for(var d=0;d<desc.length;d++)scan(desc[d]);
+			}
+		}
+	}
+});
+obs.observe(document.documentElement,{childList:true,subtree:true});
+})();</script>`
+	inject := "<style>" + css + "{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}</style>" + js
 	return []byte(inject)
 }
 
@@ -153,34 +195,44 @@ func filterHTML(resp *http.Response) *http.Response {
 // stripCSPMeta - удалить <meta http-equiv="Content-Security-Policy" ...> из HTML
 func stripCSPMeta(body []byte) []byte {
 	lower := bytes.ToLower(body)
+	var out []byte
+	pos := 0
 	for {
-		idx := bytes.Index(lower, []byte("<meta"))
+		idx := bytes.Index(lower[pos:], []byte("<meta"))
 		if idx < 0 {
+			out = append(out, body[pos:]...)
 			break
 		}
+		absIdx := pos + idx
 		// найти конец тега
-		end := idx
+		end := absIdx
 		for end < len(body) && body[end] != '>' {
 			end++
 		}
 		if end >= len(body) {
+			out = append(out, body[pos:]...)
 			break
 		}
-		tag := lower[idx:end]
+		tag := lower[absIdx:end]
 		if bytes.Contains(tag, []byte("content-security-policy")) {
-			// удалить этот meta tag
-			out := make([]byte, 0, len(body))
-			out = append(out, body[:idx]...)
+			// удалить этот meta tag, сохранить всё остальное
+			out = append(out, body[pos:absIdx]...)
 			out = append(out, body[end+1:]...)
+			// пересобрать lower для следующей итерации
 			body = out
 			lower = bytes.ToLower(body)
+			out = nil
+			pos = 0
 		} else {
-			// пропустить этот meta
-			lower = lower[end-idx:]
-			body = body[end-idx:]
+			// обычный meta — сохранить, продолжить после него
+			out = append(out, body[pos:absIdx]...)
+			pos = end + 1
 		}
 	}
-	return body
+	if out == nil {
+		return body
+	}
+	return out
 }
 
 func injectAfterHead(body []byte) []byte {

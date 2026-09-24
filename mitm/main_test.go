@@ -140,6 +140,24 @@ func TestCSPHeaderRemoved(t *testing.T) {
 	}
 }
 
+func TestCSPMetaPreservesOtherMeta(t *testing.T) {
+	body := []byte(`<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'"><title>My Page</title></head><body>Content here</body></html>`)
+	result := stripCSPMeta(body)
+	s := string(result)
+	if strings.Contains(s, "content-security-policy") {
+		t.Error("CSP meta not removed")
+	}
+	if !strings.Contains(s, `<meta charset="utf-8">`) {
+		t.Error("meta charset lost")
+	}
+	if !strings.Contains(s, "<title>My Page</title>") {
+		t.Error("title lost")
+	}
+	if !strings.Contains(s, "Content here") {
+		t.Error("body content lost")
+	}
+}
+
 func TestCSPMetaRemoved(t *testing.T) {
 	body := []byte(`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'"><title>Test</title></head><body>Hi</body></html>`)
 	result := stripCSPMeta(body)
