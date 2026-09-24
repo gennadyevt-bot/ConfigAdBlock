@@ -292,3 +292,41 @@ func TestCertRejectError(t *testing.T) {
 		}
 	}
 }
+
+// Block 4: точечные rules по реальному трафику
+func TestBlock4RealHosts(t *testing.T) {
+	blockedMu.Lock()
+	savedDomains := blockedDomains
+	savedPaths := blockedPaths
+	blockedMu.Unlock()
+	defer func() {
+		blockedMu.Lock()
+		blockedDomains = savedDomains
+		blockedPaths = savedPaths
+		blockedMu.Unlock()
+	}()
+
+	tmp, err := os.CreateTemp("", "blocklist_b4_*.txt")
+	if err != nil { t.Fatal(err) }
+	defer os.Remove(tmp.Name())
+	tmp.WriteString(`0.0.0.0 ogkopg.win
+0.0.0.0 b.porno365.golf
+0.0.0.0 mos.porno666.video
+0.0.0.0 g.porno666.fo`)
+	tmp.Close()
+	loadBlocklist(tmp.Name())
+
+	cases := []struct{ host, path string; want bool }{
+		{"ogkopg.win", "/cm/dsp", true},
+		{"b.porno365.golf", "/", true},
+		{"mos.porno666.video", "/", true},
+		{"g.porno666.fo", "/", true},
+		{"other.com", "/cm/dsp", false},
+	}
+	for _, c := range cases {
+		got, _ := checkURL(c.host, c.path)
+		if got != c.want {
+			t.Errorf("checkURL(%q, %q) = %v, want %v", c.host, c.path, got, c.want)
+		}
+	}
+}
