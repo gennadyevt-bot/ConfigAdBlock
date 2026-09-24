@@ -62,7 +62,7 @@ object CaDiagnostics {
             val pem = String(pemBytes)
             val b64 = pem.replace("-----BEGIN CERTIFICATE-----", "")
                 .replace("-----END CERTIFICATE-----", "")
-                .replace("\s".toRegex(), "")
+                .replace("[\s\r\n]+".toRegex(), "")
             val der = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
             sha256Hex(der)
         } catch (e: Exception) {
