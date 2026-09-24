@@ -86,22 +86,42 @@ func buildCosmeticInject() []byte {
 var SELS='` + jsSel + `';
 var MARKS=['Реклама','Рекламное объявление','Advertisement','Sponsored'];
 function hide(el){if(!el||!el.style)return;el.style.display='none';el.style.height='0';el.style.overflow='hidden';}
-function hideSel(root){if(!root.querySelectorAll)return;var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++)hide(els[i]);}
-function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
-function findMark(root){
+function hideSel(root){
 	if(!root||!root.querySelectorAll)return;
-	var texts=root.querySelectorAll('span,div,p,a,small,em,i,b,strong,label,button');
-	for(var i=0;i<texts.length;i++){
-		var t=norm(texts[i].textContent);
+	// сам addedNode может matches(SELS)
+	if(root.nodeType===1&&root.matches&&root.matches(SELS))hide(root);
+	var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++)hide(els[i]);
+}
+function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
+function isAdSign(el){return el&&el.matches&&el.matches(SELS);}
+function findMark(root){
+	if(!root)return;
+	var all=[];
+	// сам addedNode может содержать текст маркера
+	if(root.nodeType===1)all.push(root);
+	if(root.querySelectorAll){
+		var texts=root.querySelectorAll('span,div,p,a,small,em,i,b,strong,label,button');
+		for(var i=0;i<texts.length;i++)all.push(texts[i]);
+	}
+	for(var i=0;i<all.length;i++){
+		var t=norm(all[i].textContent);
 		if(MARKS.indexOf(t)<0)continue;
-		var el=texts[i];
-		for(var up=0;up<8&&el.parentElement;up++){
+		var el=all[i];
+		var best=null;
+		for(var up=0;up<6&&el.parentElement;up++){
 			el=el.parentElement;
 			var tag=(el.tagName||'').toUpperCase();
 			if(tag==='BODY'||tag==='HTML'||tag==='MAIN'||tag==='ARTICLE')break;
+			// приоритет: ancestor с ad-признаком
+			if(isAdSign(el)){best=el;break;}
 			var r=el.getBoundingClientRect();
-			if(r.width<200&&r.height<100){hide(el);break;}
+			// реальный рекламный контейнер: достаточно большой, но не весь экран
+			if(r.width>=200&&r.height>=80&&r.height<window.innerHeight*0.8){
+				if(!best)best=el;
+				break;
+			}
 		}
+		if(best)hide(best);
 	}
 }
 function scan(root){hideSel(root);findMark(root);}
