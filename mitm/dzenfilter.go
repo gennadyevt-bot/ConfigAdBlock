@@ -1949,6 +1949,7 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				return
 			}
 			defer resp.Body.Close()
+			flowLog("GENERIC_H2_RESP host=" + r.Host + " path=" + pathQuery + " status=" + strconv.Itoa(resp.StatusCode) + " ct=" + resp.Header.Get("Content-Type") + " enc=" + resp.Header.Get("Content-Encoding") + " len=" + strconv.FormatInt(resp.ContentLength, 10))
 			// headers
 			for k, vv := range resp.Header {
 				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") || strings.EqualFold(k, "Content-Length") {
@@ -1973,6 +1974,8 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 					w.Header().Del("Content-Security-Policy-Report-Only")
 					atomic.AddInt64(&genericHTMLFilteredN, 1)
 					flowLog("GENERIC_H2_HTML_FILTERED host=" + r.Host + " path=" + pathQuery)
+				} else {
+					flowLog("GENERIC_H2_HTML_SKIP host=" + r.Host + " path=" + pathQuery + " enc=" + enc + " len=" + strconv.Itoa(len(raw)))
 				}
 				w.Header().Set("Content-Length", strconv.Itoa(len(mod)))
 				w.WriteHeader(resp.StatusCode)
