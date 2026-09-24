@@ -121,6 +121,13 @@ func loadBlocklist(path string) {
 			continue
 		}
 		d = strings.TrimSuffix(d, ".")
+		// ABP-формат: ||domain^ или ||domain/path
+		if strings.HasPrefix(d, "||") {
+			d = d[2:]
+			if i := strings.Index(d, "^"); i >= 0 {
+				d = d[:i]
+			}
+		}
 		// Правило "host/path" — блокирует только указанный префикс пути
 		// на этом домене (и его поддоменах), остальное живёт. Нужно,
 		// чтобы резать рекламные endpoint'ы общих доменов (yandex.ru/ads/)
@@ -145,6 +152,12 @@ func loadBlocklist(path string) {
 // по родителям), потом path-правила "host/path". Возвращает совпавшее
 // правило — для журнала FILTER=BLOCK rule=<правило>.
 func checkURL(host, path string) (bool, string) {
+	// query matching: path может содержать "?query=..."
+	if i := strings.Index(path, "?"); i >= 0 {
+		if hit, rule := checkURL(host, path[:i]); hit {
+			return true, rule
+		}
+	}
 	d := strings.ToLower(host)
 	// отрезаем порт корректно и для IPv6 ([2001:db8::1]:443 -> 2001:db8::1)
 	if h, _, err := net.SplitHostPort(d); err == nil {

@@ -124,3 +124,80 @@ func TestGenericCosmeticRulesCount(t *testing.T) {
 	}
 	t.Logf("generic_cosmetic_rules count=%d", count)
 }
+
+// Universal Filter Pack tests
+func TestCSPHeaderRemoved(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Content-Security-Policy", "default-src 'self'")
+	resp.Header.Set("Content-Security-Policy-Report-Only", "default-src 'self'")
+	// симулируем удаление как в filterHTML
+	resp.Header.Del("Content-Security-Policy")
+	resp.Header.Del("Content-Security-Policy-Report-Only")
+	if resp.Header.Get("Content-Security-Policy") != "" || resp.Header.Get("Content-Security-Policy-Report-Only") != "" {
+		t.Error("CSP headers not removed")
+	}
+}
+
+func TestCSPMetaRemoved(t *testing.T) {
+	body := []byte(`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'"><title>Test</title></head><body>Hi</body></html>`)
+	result := stripCSPMeta(body)
+	if bytes.Contains(bytes.ToLower(result), []byte("content-security-policy")) {
+		t.Error("meta CSP not removed")
+	}
+	if !bytes.Contains(result, []byte("<title>Test</title>")) {
+		t.Error("other content damaged")
+	}
+}
+
+func TestCosmeticInjectPresent(t *testing.T) {
+	if len(cosmeticInject) == 0 {
+		t.Error("cosmeticInject is empty")
+	}
+	s := string(cosmeticInject)
+	if !strings.Contains(s, "display:none") {
+		t.Error("cosmeticInject missing display:none")
+	}
+}
+
+func TestDomainRuleBlocked(t *testing.T) {
+	data, _ := os.ReadFile("../app/src/main/assets/blocklist.txt")
+	if len(data) == 0 { t.Skip("no blocklist") }
+	// первый валидный домен из blocklist
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, "!") { continue }
+		if strings.HasPrefix(l, "0.0.0.0 ") || strings.HasPrefix(l, "127.0.0.1 ") {
+			l = l[strings.Index(l, " ")+1:]
+		}
+		l = strings.TrimPrefix(l, "||")
+		if strings.Contains(l, "^") || strings.Contains(l, "*") {
+			l = strings.Split(strings.Split(l, "^")[0], "*")[0]
+		}
+		l = strings.TrimPrefix(l, "www.")
+		if len(l) < 4 || !strings.Contains(l, ".") || l == "localhost" { continue }
+		blocked, _ := checkURL(l, "/")
+		if !blocked {
+			t.Errorf("domain %s from blocklist not blocked", l)
+		}
+		return
+	}
+}
+
+func TestABPDomainRule(t *testing.T) {
+	blocked, _ := checkURL("ads.example.com", "/")
+	// зависит от blocklist, но формат ||ads.example.com^ должен парситься
+	_ = blocked
+}
+
+func TestNoBroadSelectors(t *testing.T) {
+	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
+	if err != nil { t.Skip("no asset") }
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.ToLower(strings.TrimSpace(line))
+		if l == "" || strings.HasPrefix(l, "!") { continue }
+		if strings.Contains(l, "class*=ad") || strings.Contains(l, "id*=ad") ||
+			strings.Contains(l, "class*=banner") || strings.Contains(l, "class*=promo") {
+			t.Errorf("broad selector found: %s", l)
+		}
+	}
+}

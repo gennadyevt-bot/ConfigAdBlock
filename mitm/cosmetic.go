@@ -130,7 +130,11 @@ func filterHTML(resp *http.Response) *http.Response {
 			return resp
 		}
 	}
-	mod := injectAfterHead(raw)
+	// Universal Filter Pack: удаляем CSP (header + meta) перед inject
+	resp.Header.Del("Content-Security-Policy")
+	resp.Header.Del("Content-Security-Policy-Report-Only")
+	mod := stripCSPMeta(raw)
+	mod = injectAfterHead(mod)
 	if enc == "gzip" {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
@@ -144,6 +148,39 @@ func filterHTML(resp *http.Response) *http.Response {
 	resp.ContentLength = int64(len(mod))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(mod)))
 	return resp
+}
+
+// stripCSPMeta - удалить <meta http-equiv="Content-Security-Policy" ...> из HTML
+func stripCSPMeta(body []byte) []byte {
+	lower := bytes.ToLower(body)
+	for {
+		idx := bytes.Index(lower, []byte("<meta"))
+		if idx < 0 {
+			break
+		}
+		// найти конец тега
+		end := idx
+		for end < len(body) && body[end] != '>' {
+			end++
+		}
+		if end >= len(body) {
+			break
+		}
+		tag := lower[idx:end]
+		if bytes.Contains(tag, []byte("content-security-policy")) {
+			// удалить этот meta tag
+			out := make([]byte, 0, len(body))
+			out = append(out, body[:idx]...)
+			out = append(out, body[end+1:]...)
+			body = out
+			lower = bytes.ToLower(body)
+		} else {
+			// пропустить этот meta
+			lower = lower[end-idx:]
+			body = body[end-idx:]
+		}
+	}
+	return body
 }
 
 func injectAfterHead(body []byte) []byte {

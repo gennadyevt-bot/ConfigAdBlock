@@ -128,7 +128,9 @@ func socksHandleConn(c net.Conn) {
 		_ = c.SetDeadline(time.Time{})
 		if filtering && port == 443 {
 			raw, sni, _, _ := peekClientHello(c)
-			if hit, _ := checkURL(sni, ""); sni != "" && hit {
+			// Рекламные домены Google/Yandex — blocklist ДО любого pinned/direct
+			if hit, rule := checkURL(sni, ""); sni != "" && hit {
+				flowLog("HTTPS_BLOCK sni=" + sni + " rule=" + rule)
 				atomic.AddInt64(&transportBlocked, 1)
 				return
 			}

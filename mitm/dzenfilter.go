@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -1567,21 +1568,19 @@ func isPinnedHost(host string) bool {
 	h := strings.ToLower(host)
 	for _, d := range []string{
 		// Рекламные домены Google НЕ pinned — их фильтруем через blocklist
-		"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com",
-		"youtube.com", "ytimg.com",
+		"google.com", "googleapis.com", "youtube.com", "ytimg.com",
 		"facebook.com", "fbcdn.net", "instagram.com", "cdninstagram.com",
 		"twitter.com", "twimg.com", "x.com",
 		"whatsapp.net", "whatsapp.com", "telegram.org", "t.me",
 		"apple.com", "icloud.com", "mzstatic.com",
-		"microsoft.com", "windows.net", "office.net", "live.com", "office365.com",
-		"amazon.com", "amazonaws.com", "cloudfront.net",
+		"microsoft.com", "live.com",
 		"netflix.com", "nflxvideo.net", "nflximg.net",
-		"spotify.com", "scdn.co",
+		"spotify.com",
 		"zoom.us",
-		"vk.com", "vk-cdn.net", "userapi.com",
-		"ok.ru", "okcdn.net",
-		"mail.ru", "mrcloud.net",
-		"avito.ru", "avito.st",
+		"vk.com", "userapi.com",
+		"ok.ru",
+		"mail.ru",
+		"avito.ru",
 	} {
 		if h == d || strings.HasSuffix(h, "."+d) {
 			return true
@@ -1589,6 +1588,9 @@ func isPinnedHost(host string) bool {
 	}
 	return false
 }
+
+// runtimeBypass - хосты, которые реально отвергли CA/pinning, не MITM'им
+var runtimeBypass sync.Map
 
 // handleGenericMITM - generic HTTPS MITM для обычных сайтов.
 // Возвращает handled=true если взял соединение (успех или провал),
@@ -1615,7 +1617,13 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=pinned")
 		return false, false
 	}
-	// 4) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
+	// 4) runtime bypass cache - host уже отверг CA ранее
+	if _, bypassed := runtimeBypass.Load(sni); bypassed {
+		atomic.AddInt64(&genericDirectBypassN, 1)
+		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=runtime-bypass")
+		return false, false
+	}
+	// 5) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
 	if alpn := peekClientHelloALPN(raw); alpn == "h2" {
 		atomic.AddInt64(&genericDirectBypassN, 1)
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=alpn:" + alpn)
@@ -1646,7 +1654,9 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	if err := tlsConn.Handshake(); err != nil {
 		atomic.AddInt64(&genericMitmFailN, 1)
 		es := err.Error()
-		flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es)
+		// runtime bypass: host реально отверг CA/pinning
+		runtimeBypass.Store(sni, true)
+		flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es + " -> runtime-bypass")
 		return true, false
 	}
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
