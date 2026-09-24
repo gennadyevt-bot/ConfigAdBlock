@@ -749,7 +749,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	}()
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   []string{"http/1.1"},
 		Certificates: []tls.Certificate{*leaf},
 	}
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)

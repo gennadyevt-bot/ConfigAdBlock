@@ -267,15 +267,15 @@ func TestH2NotBypassed(t *testing.T) {
 }
 
 func TestBlocklistBeforeALPN(t *testing.T) {
-	blMu.Lock()
+	blockedMu.Lock()
 	savedD := blockedDomains
 	savedP := blockedPaths
-	blMu.Unlock()
+	blockedMu.Unlock()
 	defer func() {
-		blMu.Lock()
+		blockedMu.Lock()
 		blockedDomains = savedD
 		blockedPaths = savedP
-		blMu.Unlock()
+		blockedMu.Unlock()
 	}()
 	tmp, _ := os.CreateTemp("", "bl_alpn_*.txt")
 	defer os.Remove(tmp.Name())
@@ -288,15 +288,15 @@ func TestBlocklistBeforeALPN(t *testing.T) {
 }
 
 func TestNewRoots(t *testing.T) {
-	blMu.Lock()
+	blockedMu.Lock()
 	savedD := blockedDomains
 	savedP := blockedPaths
-	blMu.Unlock()
+	blockedMu.Unlock()
 	defer func() {
-		blMu.Lock()
+		blockedMu.Lock()
 		blockedDomains = savedD
 		blockedPaths = savedP
-		blMu.Unlock()
+		blockedMu.Unlock()
 	}()
 	tmp, _ := os.CreateTemp("", "bl5_*.txt")
 	defer os.Remove(tmp.Name())
@@ -413,58 +413,84 @@ func TestBlock4RealHosts(t *testing.T) {
 }
 
 // Block 5: новые root rules + cosmetic rules
-func TestBlock5NewRoots(t *testing.T) {
-<<<<<<< HEAD
-	blockedMu.Lock()
-	savedD := blockedDomains
-	savedP := blockedPaths
-	blockedMu.Unlock()
-	defer func() {
-		blockedMu.Lock()
-		blockedDomains = savedD
-		blockedPaths = savedP
-		blockedMu.Unlock()
-=======
-	blMu.Lock()
-	savedD := blockedDomains
-	savedP := blockedPaths
-	blMu.Unlock()
-	defer func() {
-		blMu.Lock()
-		blockedDomains = savedD
-		blockedPaths = savedP
-		blMu.Unlock()
->>>>>>> ec6cc58 (block 5: generic ad cosmetic selectors + missing root rules + tests)
-	}()
-
-	tmp, _ := os.CreateTemp("", "bl5_*.txt")
-	defer os.Remove(tmp.Name())
-	tmp.WriteString(`0.0.0.0 googletagservices.com
-0.0.0.0 adservices.google.com
-0.0.0.0 mytarget.ru
-0.0.0.0 ironsrc.com
-0.0.0.0 ironsrc.mobi
-0.0.0.0 chartboost.com`)
-	tmp.Close()
-	loadBlocklist(tmp.Name())
-
-	roots := []string{
-		"googletagservices.com", "adservices.google.com", "mytarget.ru",
-		"ironsrc.com", "ironsrc.mobi", "chartboost.com",
-	}
-	for _, r := range roots {
-		if b, _ := checkURL(r, "/"); !b {
-			t.Errorf("root %s not blocked", r)
+func TestNoBroadSelectors(t *testing.T) {
+	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
+	if err != nil { t.Skip("no asset") }
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.ToLower(strings.TrimSpace(line))
+		if l == "" || strings.HasPrefix(l, "!") { continue }
+		if strings.Contains(l, "class*=ad") || strings.Contains(l, "id*=ad") ||
+			strings.Contains(l, "class*=banner") || strings.Contains(l, "class*=promo") {
+			t.Errorf("broad selector found: %s", l)
 		}
-		if b, _ := checkURL("sub."+r, "/"); !b {
-			t.Errorf("subdomain of %s not blocked", r)
-		}
-	}
-	if b, _ := checkURL("other.com", "/"); b {
-		t.Error("unrelated domain wrongly blocked")
 	}
 }
 
+// Block 3: isCertRejectError tests
+func TestCertRejectError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("tls: unknown certificate"), true},
+		{fmt.Errorf("tls: bad certificate"), true},
+		{fmt.Errorf("tls: certificate unknown"), true},
+		{fmt.Errorf("tls: unknown ca"), true},
+		{fmt.Errorf("tls: certificate verify failure"), true},
+		{fmt.Errorf("tls: certificate signed by unknown authority"), true},
+		{fmt.Errorf("i/o timeout"), false},
+		{fmt.Errorf("EOF"), false},
+		{fmt.Errorf("connection reset by peer"), false},
+		{fmt.Errorf("read: connection timed out"), false},
+	}
+	for _, c := range cases {
+		got := isCertRejectError(c.err)
+		if got != c.want {
+			t.Errorf("isCertRejectError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// Block 4: точечные rules по реальному трафику
+func TestBlock4RealHosts(t *testing.T) {
+	blockedMu.Lock()
+	savedDomains := blockedDomains
+	savedPaths := blockedPaths
+	blockedMu.Unlock()
+	defer func() {
+		blockedMu.Lock()
+		blockedDomains = savedDomains
+		blockedPaths = savedPaths
+		blockedMu.Unlock()
+	}()
+
+	tmp, err := os.CreateTemp("", "blocklist_b4_*.txt")
+	if err != nil { t.Fatal(err) }
+	defer os.Remove(tmp.Name())
+	tmp.WriteString(`ogkopg.win/cm/dsp
+0.0.0.0 b.porno365.golf
+0.0.0.0 mos.porno666.video
+0.0.0.0 g.porno666.fo`)
+	tmp.Close()
+	loadBlocklist(tmp.Name())
+
+	cases := []struct{ host, path string; want bool }{
+		{"ogkopg.win", "/cm/dsp", true},
+		{"ogkopg.win", "/other", false},
+		{"b.porno365.golf", "/", true},
+		{"mos.porno666.video", "/", true},
+		{"g.porno666.fo", "/", true},
+		{"other.com", "/cm/dsp", false},
+	}
+	for _, c := range cases {
+		got, _ := checkURL(c.host, c.path)
+		if got != c.want {
+			t.Errorf("checkURL(%q, %q) = %v, want %v", c.host, c.path, got, c.want)
+		}
+	}
+}
+
+// Block 5: новые root rules + cosmetic rules
 func TestBlock5CosmeticSelectors(t *testing.T) {
 	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
 	if err != nil { t.Skip("no asset") }
