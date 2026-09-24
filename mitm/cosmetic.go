@@ -46,6 +46,12 @@ func buildCosmeticInject() []byte {
 
 // filterHTML: text/html -> вставляем косметику после <head>.
 // Сжатие (gzip) прозрачно распаковывается и упаковывается обратно.
+// isHTML проверяет Content-Type на HTML
+func isHTML(resp *http.Response) bool {
+	ct := resp.Header.Get("Content-Type")
+	return strings.Contains(ct, "text/html")
+}
+
 func filterHTML(resp *http.Response) *http.Response {
 	if resp == nil || resp.Request == nil || resp.Body == nil {
 		return resp
