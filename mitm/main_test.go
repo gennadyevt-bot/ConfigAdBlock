@@ -1,6 +1,8 @@
 package mitm
 
 import (
+	"bytes"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
