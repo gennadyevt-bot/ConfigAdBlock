@@ -309,7 +309,7 @@ func TestBlock4RealHosts(t *testing.T) {
 	tmp, err := os.CreateTemp("", "blocklist_b4_*.txt")
 	if err != nil { t.Fatal(err) }
 	defer os.Remove(tmp.Name())
-	tmp.WriteString(`0.0.0.0 ogkopg.win
+	tmp.WriteString(`ogkopg.win/cm/dsp
 0.0.0.0 b.porno365.golf
 0.0.0.0 mos.porno666.video
 0.0.0.0 g.porno666.fo`)
@@ -318,6 +318,7 @@ func TestBlock4RealHosts(t *testing.T) {
 
 	cases := []struct{ host, path string; want bool }{
 		{"ogkopg.win", "/cm/dsp", true},
+		{"ogkopg.win", "/other", false},
 		{"b.porno365.golf", "/", true},
 		{"mos.porno666.video", "/", true},
 		{"g.porno666.fo", "/", true},
