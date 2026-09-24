@@ -1612,8 +1612,12 @@ func isPinnedHost(host string) bool {
 	return false
 }
 
-// runtimeBypass - хосты, которые реально отвергли CA/pinning, не MITM'им
+// runtimeBypass - хосты, которые реально отвергли CA/pinning, не MITM'им.
+// TTL 5 минут: после истечения запись удаляется и MITM пробуется снова.
+// Значение = time.Now().UnixNano() момента отказа.
 var runtimeBypass sync.Map
+
+const runtimeBypassTTL = 5 * time.Minute
 
 // handleGenericMITM - generic HTTPS MITM для обычных сайтов.
 // Возвращает handled=true если взял соединение (успех или провал),
@@ -1640,11 +1644,17 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=pinned")
 		return false, false
 	}
-	// 4) runtime bypass cache - host уже отверг CA ранее
-	if _, bypassed := runtimeBypass.Load(sni); bypassed {
-		atomic.AddInt64(&genericDirectBypassN, 1)
-		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=runtime-bypass")
-		return false, false
+	// 4) runtime bypass cache - host уже отверг CA ранее (TTL 5 минут)
+	if v, bypassed := runtimeBypass.Load(sni); bypassed {
+		ts, _ := v.(int64)
+		if age := time.Since(time.Unix(0, ts)); age < runtimeBypassTTL {
+			atomic.AddInt64(&genericDirectBypassN, 1)
+			flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=runtime-bypass age=" + age.String())
+			return false, false
+		}
+		// TTL истёк: удаляем запись и снова пробуем MITM
+		runtimeBypass.Delete(sni)
+		flowLog("GENERIC_RUNTIME_BYPASS_EXPIRED sni=" + sni)
 	}
 	// h2 больше не bypass — MITM принимает h2 через handleGenericH2
 
@@ -1674,7 +1684,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		es := err.Error()
 		// runtime bypass только при явном cert reject, не при timeout/EOF
 		if isCertRejectError(err) {
-			runtimeBypass.Store(sni, true)
+			runtimeBypass.Store(sni, time.Now().UnixNano())
 			flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es + " -> runtime-bypass")
 		} else {
 			flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es)
