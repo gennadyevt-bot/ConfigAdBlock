@@ -165,32 +165,52 @@ func filterHTML(resp *http.Response) *http.Response {
 	enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
 	raw, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if err != nil || len(raw) < 256 {
+	if err != nil {
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
 		return resp
 	}
-	// 2.0.3: Content-Encoding непустой и не gzip (br/deflate) -
-	// НЕ модифицируем body, отдаём как есть
-	if enc != "" && enc != "gzip" {
-		resp.Body = io.NopCloser(bytes.NewReader(raw))
+	// ОБЩАЯ обработка body — ей же пользуется h2 generic handler
+	mod, changed := filterHTMLBody(raw, enc)
+	if !changed {
+		resp.Body = io.NopCloser(bytes.NewReader(mod))
 		return resp
-	}
-	if enc == "gzip" {
-		zr, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			resp.Body = io.NopCloser(bytes.NewReader(raw))
-			return resp
-		}
-		raw, err = io.ReadAll(zr)
-		zr.Close()
-		if err != nil {
-			resp.Body = io.NopCloser(bytes.NewReader(nil))
-			return resp
-		}
 	}
 	// Universal Filter Pack: удаляем CSP (header + meta) перед inject
 	resp.Header.Del("Content-Security-Policy")
 	resp.Header.Del("Content-Security-Policy-Report-Only")
+	if enc != "gzip" {
+		resp.Header.Del("Content-Length")
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(mod))
+	resp.ContentLength = int64(len(mod))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(mod)))
+	return resp
+}
+
+// filterHTMLBody - ОБЩАЯ обработка HTML body для HTTP/1.1 и HTTP/2 generic pipelines.
+// raw — тело ответа, enc — Content-Encoding в lower-case.
+// Возвращает (body, changed): changed=false — body НЕ модифицировали (безопасно отдать как есть);
+// changed=true — body прошёл CSP meta strip + cosmetic inject (+ gzip round-trip при enc=="gzip").
+// 2.0.3: Content-Encoding непустой и не gzip (br/deflate) — НЕ модифицируем body.
+func filterHTMLBody(raw []byte, enc string) ([]byte, bool) {
+	if len(raw) < 256 {
+		return raw, false
+	}
+	if enc != "" && enc != "gzip" {
+		return raw, false
+	}
+	if enc == "gzip" {
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return raw, false
+		}
+		dec, err := io.ReadAll(zr)
+		zr.Close()
+		if err != nil {
+			return nil, false // битый gzip — пустое тело
+		}
+		raw = dec
+	}
 	mod := stripCSPMeta(raw)
 	mod = injectAfterHead(mod)
 	if enc == "gzip" {
@@ -199,13 +219,8 @@ func filterHTML(resp *http.Response) *http.Response {
 		_, _ = zw.Write(mod)
 		_ = zw.Close()
 		mod = buf.Bytes()
-	} else {
-		resp.Header.Del("Content-Length")
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(mod))
-	resp.ContentLength = int64(len(mod))
-	resp.Header.Set("Content-Length", strconv.Itoa(len(mod)))
-	return resp
+	return mod, true
 }
 
 // stripCSPMeta - удалить <meta http-equiv="Content-Security-Policy" ...> из HTML

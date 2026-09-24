@@ -2,7 +2,10 @@ package mitm
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/rand"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -72,7 +75,8 @@ func TestALPNParser(t *testing.T) {
 			alpnBytes = append(alpnBytes, []byte(p)...)
 		}
 		listLen := len(alpnBytes)
-		ext := []byte{0x00, 0x10, byte(listLen >> 8), byte(listLen & 0xFF), byte(listLen >> 8), byte(listLen & 0xFF)}
+		extLen := listLen + 2
+		ext := []byte{0x00, 0x10, byte(extLen >> 8), byte(extLen & 0xFF), byte(listLen >> 8), byte(listLen & 0xFF)}
 		ext = append(ext, alpnBytes...)
 		// TLS record header + handshake header + version + random + sidLen(0) + ciphers(2) + comp(1) + extLen + ext
 		body := []byte{0x03, 0x03} // version
@@ -181,6 +185,17 @@ func TestCosmeticInjectPresent(t *testing.T) {
 }
 
 func TestDomainRuleBlocked(t *testing.T) {
+	blockedMu.Lock()
+	savedD := blockedDomains
+	savedP := blockedPaths
+	blockedMu.Unlock()
+	defer func() {
+		blockedMu.Lock()
+		blockedDomains = savedD
+		blockedPaths = savedP
+		blockedMu.Unlock()
+	}()
+	loadBlocklist("../app/src/main/assets/blocklist.txt")
 	data, _ := os.ReadFile("../app/src/main/assets/blocklist.txt")
 	if len(data) == 0 { t.Skip("no blocklist") }
 	// первый валидный домен из blocklist
@@ -252,17 +267,6 @@ track.example.com/collect
 		if got != c.wantBlock {
 			t.Errorf("checkURL(%q, %q) = %v, want %v", c.host, c.path, got, c.wantBlock)
 		}
-	}
-}
-
-// h2 больше не DIRECT_BYPASS: peekClientHelloALPN не должен возвращать "h2" как bypass reason
-func TestH2NotBypassed(t *testing.T) {
-	// после фикса handleGenericMITM не делает DIRECT для alpn=="h2"
-	// проверяем что peekClientHelloALPN всё ещё парсит, но handleGenericMITM не вызывает bypass для h2
-	// (логическая проверка: h2 bypass удалён из кода)
-	s := string(cosmeticInject)
-	if len(s) == 0 {
-		t.Error("cosmeticInject empty — generic MITM сломан")
 	}
 }
 
@@ -412,105 +416,76 @@ func TestBlock4RealHosts(t *testing.T) {
 	}
 }
 
-// Block 5: новые root rules + cosmetic rules
-func TestNoBroadSelectors(t *testing.T) {
-	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
-	if err != nil { t.Skip("no asset") }
-	for _, line := range strings.Split(string(data), "\n") {
-		l := strings.ToLower(strings.TrimSpace(line))
-		if l == "" || strings.HasPrefix(l, "!") { continue }
-		if strings.Contains(l, "class*=ad") || strings.Contains(l, "id*=ad") ||
-			strings.Contains(l, "class*=banner") || strings.Contains(l, "class*=promo") {
-			t.Errorf("broad selector found: %s", l)
-		}
-	}
-}
-
-// Block 3: isCertRejectError tests
-func TestCertRejectError(t *testing.T) {
+// Block 5: выбор generic handler'а по ALPN — чистая функция, без сети.
+// "h2" -> h2 handler, "http/1.1"/""/прочее -> существующий HTTP/1.1 pipeline.
+func TestGenericH2Routing(t *testing.T) {
 	cases := []struct {
-		err  error
-		want bool
+		proto string
+		want  bool
 	}{
-		{fmt.Errorf("tls: unknown certificate"), true},
-		{fmt.Errorf("tls: bad certificate"), true},
-		{fmt.Errorf("tls: certificate unknown"), true},
-		{fmt.Errorf("tls: unknown ca"), true},
-		{fmt.Errorf("tls: certificate verify failure"), true},
-		{fmt.Errorf("tls: certificate signed by unknown authority"), true},
-		{fmt.Errorf("i/o timeout"), false},
-		{fmt.Errorf("EOF"), false},
-		{fmt.Errorf("connection reset by peer"), false},
-		{fmt.Errorf("read: connection timed out"), false},
+		{"h2", true},
+		{"http/1.1", false},
+		{"", false},
+		{"h3", false},
 	}
 	for _, c := range cases {
-		got := isCertRejectError(c.err)
-		if got != c.want {
-			t.Errorf("isCertRejectError(%v) = %v, want %v", c.err, got, c.want)
+		if got := shouldGenericH2(c.proto); got != c.want {
+			t.Errorf("shouldGenericH2(%q) = %v, want %v", c.proto, got, c.want)
 		}
 	}
 }
 
-// Block 4: точечные rules по реальному трафику
-func TestBlock4RealHosts(t *testing.T) {
-	blockedMu.Lock()
-	savedDomains := blockedDomains
-	savedPaths := blockedPaths
-	blockedMu.Unlock()
-	defer func() {
-		blockedMu.Lock()
-		blockedDomains = savedDomains
-		blockedPaths = savedPaths
-		blockedMu.Unlock()
-	}()
+// Block 5: ОБЩАЯ HTML-обработка (h1+h2): CSP meta strip, cosmetic inject, gzip round-trip
+func TestFilterHTMLBodyShared(t *testing.T) {
+	if len(cosmeticInject) == 0 {
+		t.Skip("cosmeticInject empty")
+	}
+	rb := make([]byte, 512)
+	rand.Read(rb)
+	filler := fmt.Sprintf("%x", rb)
+	html := []byte(`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'"><title>T</title></head><body>` + filler + `</body></html>`)
 
-	tmp, err := os.CreateTemp("", "blocklist_b4_*.txt")
-	if err != nil { t.Fatal(err) }
-	defer os.Remove(tmp.Name())
-	tmp.WriteString(`ogkopg.win/cm/dsp
-0.0.0.0 b.porno365.golf
-0.0.0.0 mos.porno666.video
-0.0.0.0 g.porno666.fo`)
-	tmp.Close()
-	loadBlocklist(tmp.Name())
+	// identity encoding
+	mod, changed := filterHTMLBody(html, "")
+	if !changed {
+		t.Fatal("identity: HTML не модифицирован")
+	}
+	if bytes.Contains(bytes.ToLower(mod), []byte("content-security-policy")) {
+		t.Error("identity: CSP meta не удалён")
+	}
+	if !bytes.Contains(mod, cosmeticInject) {
+		t.Error("identity: cosmeticInject не вставлен")
+	}
 
-	cases := []struct{ host, path string; want bool }{
-		{"ogkopg.win", "/cm/dsp", true},
-		{"ogkopg.win", "/other", false},
-		{"b.porno365.golf", "/", true},
-		{"mos.porno666.video", "/", true},
-		{"g.porno666.fo", "/", true},
-		{"other.com", "/cm/dsp", false},
+	// gzip round-trip
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	zw.Write(html)
+	zw.Close()
+	mod2, changed2 := filterHTMLBody(buf.Bytes(), "gzip")
+	if !changed2 {
+		t.Fatal("gzip: HTML не модифицирован")
 	}
-	for _, c := range cases {
-		got, _ := checkURL(c.host, c.path)
-		if got != c.want {
-			t.Errorf("checkURL(%q, %q) = %v, want %v", c.host, c.path, got, c.want)
-		}
+	zr, err := gzip.NewReader(bytes.NewReader(mod2))
+	if err != nil {
+		t.Fatalf("gzip: не перепакован: %v", err)
 	}
-}
+	dec, err := io.ReadAll(zr)
+	zr.Close()
+	if err != nil {
+		t.Fatalf("gzip: read: %v", err)
+	}
+	if bytes.Contains(bytes.ToLower(dec), []byte("content-security-policy")) {
+		t.Error("gzip: CSP meta не удалён")
+	}
+	if !bytes.Contains(dec, cosmeticInject) {
+		t.Error("gzip: cosmeticInject не вставлен")
+	}
 
-// Block 5: новые root rules + cosmetic rules
-func TestBlock5CosmeticSelectors(t *testing.T) {
-	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
-	if err != nil { t.Skip("no asset") }
-	s := string(data)
-	must := []string{
-		"[data-google-query-id]", `[data-ad-status="filled"]`,
-		`[name^="google_ads_iframe_"]`,
-		`iframe[src*="googlesyndication.com"]`,
-		`iframe[src*="doubleclick.net"]`,
-		`iframe[src*="adfox.ru"]`,
-	}
-	for _, m := range must {
-		if !strings.Contains(s, m) {
-			t.Errorf("missing selector: %s", m)
-		}
-	}
-	// запрещённых broad selectors по-прежнему нет
-	for _, bad := range []string{`class*=ad]`, `id*=ad]`, `class*=banner]`, `class*=promo]`} {
-		if strings.Contains(s, bad) {
-			t.Errorf("broad selector found: %s", bad)
-		}
+	// br/deflate — НЕ трогаем
+	raw3 := []byte(filler)
+	mod3, changed3 := filterHTMLBody(raw3, "br")
+	if changed3 || !bytes.Equal(mod3, raw3) {
+		t.Error("br: body модифицирован, а не должен быть")
 	}
 }

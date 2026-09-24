@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"errors"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"crypto/sha256"
 	"crypto/x509"
@@ -1685,7 +1686,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	flowLog("GENERIC_MITM_OK sni=" + sni)
 
 	// h2 -> HTTP/2 handler, http/1.1 -> существующий pipeline
-	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+	if shouldGenericH2(tlsConn.ConnectionState().NegotiatedProtocol) {
 		return true, handleGenericH2(tlsConn, sni)
 	}
 
@@ -1893,9 +1894,17 @@ func dialTLS(sni string) (net.Conn, error) {
 	return tlsConn, nil
 }
 
+// shouldGenericH2 - чистая функция выбора handler'а по ALPN после handshake.
+// Вынесена отдельно, чтобы тестировать без сети. "h2" -> h2 handler,
+// всё остальное (включая "http/1.1" и пустой ALPN) -> существующий HTTP/1.1 pipeline.
+func shouldGenericH2(negotiatedProto string) bool {
+	return negotiatedProto == "h2"
+}
+
 // handleGenericH2 - HTTP/2 handler для generic MITM.
 // Принимает h2 от клиента, upstream остаётся HTTP/1.1.
 // Для каждого запроса: checkURL(host,path+query) -> BLOCK или upstream -> filterHTML если HTML.
+// HTML-обработка — ТА ЖА САМАЯ filterHTMLBody, что и в HTTP/1.1 pipeline (CSP strip + cosmetic + gzip).
 func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 	flowLog("GENERIC_H2_REQ sni=" + sni)
 	h2s := &http2.Server{}
@@ -1942,48 +1951,42 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 			defer resp.Body.Close()
 			// headers
 			for k, vv := range resp.Header {
-				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") {
+				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") || strings.EqualFold(k, "Content-Length") {
 					continue
 				}
 				w.Header()[k] = vv
 			}
-			// HTML -> filterHTML
+			// HTML -> ТА ЖЕ обработка, что и в HTTP/1.1 pipeline (filterHTMLBody)
 			ct := resp.Header.Get("Content-Type")
-			if strings.Contains(ct, "text/html") {
-				body, err := io.ReadAll(resp.Body)
-				if err == nil {
-					flowLog("GENERIC_H2_HTML_FILTERED host=" + r.Host + " path=" + pathQuery)
-					body = injectCosmeticBytes(body)
-					w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-					w.WriteHeader(resp.StatusCode)
-					w.Write(body)
+			if resp.StatusCode == http.StatusOK && strings.Contains(ct, "text/html") {
+				raw, err := io.ReadAll(resp.Body)
+				if err != nil {
+					flowLog("GENERIC_H2_FAIL body sni=" + sni + " host=" + r.Host + " err=" + err.Error())
+					w.WriteHeader(http.StatusBadGateway)
 					return
 				}
+				enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
+				mod, changed := filterHTMLBody(raw, enc)
+				if changed {
+					// CSP headers уже скопированы в w.Header() — удаляем их там
+					w.Header().Del("Content-Security-Policy")
+					w.Header().Del("Content-Security-Policy-Report-Only")
+					atomic.AddInt64(&genericHTMLFilteredN, 1)
+					flowLog("GENERIC_H2_HTML_FILTERED host=" + r.Host + " path=" + pathQuery)
+				}
+				w.Header().Set("Content-Length", strconv.Itoa(len(mod)))
+				w.WriteHeader(resp.StatusCode)
+				_, _ = w.Write(mod)
+				return
+			}
+			if resp.ContentLength >= 0 {
+				w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 			}
 			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
+			_, _ = io.Copy(w, resp.Body)
 		}),
 	}
-	err := h2s.ServeConn(tlsConn, &http2.ServeConnOpts{Handler: h2srv.Handler})
-	if err != nil {
-		flowLog("GENERIC_H2_FAIL serve sni=" + sni + " err=" + err.Error())
-		return false
-	}
+	// http2.Server.ServeConn НЕ возвращает error: обрабатывает соединение до закрытия
+	h2s.ServeConn(tlsConn, &http2.ServeConnOpts{Handler: h2srv.Handler})
 	return true
-}
-
-// injectCosmeticBytes - применить cosmetic inject к HTML body
-func injectCosmeticBytes(body []byte) []byte {
-	if len(cosmeticInject) == 0 {
-		return body
-	}
-	idx := bytes.Index(bytes.ToLower(body), []byte("</head>"))
-	if idx < 0 {
-		return body
-	}
-	out := make([]byte, 0, len(body)+len(cosmeticInject))
-	out = append(out, body[:idx]...)
-	out = append(out, cosmeticInject...)
-	out = append(out, body[idx:]...)
-	return out
 }
