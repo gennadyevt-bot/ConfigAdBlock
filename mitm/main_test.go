@@ -1,4 +1,4 @@
-package selfcheck
+package mitm
 
 import (
 	"os"
@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
+// Universal V1: generic cosmetic rules не должны содержать опасных селекторов
 func TestNoDangerousSelectors(t *testing.T) {
-	data, err := os.ReadFile("../../app/src/main/assets/generic_cosmetic_rules.txt")
+	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
 	if err != nil {
 		t.Skip("asset not found")
 	}
@@ -16,21 +17,21 @@ func TestNoDangerousSelectors(t *testing.T) {
 		if l == "" || strings.HasPrefix(l, "!") {
 			continue
 		}
-		sel := strings.SplitN(l, "##", 2)
-		if len(sel) == 2 {
-			l = sel[1]
+		if strings.Contains(l, "##") {
+			l = strings.SplitN(l, "##", 2)[1]
 		}
 		lower := strings.ToLower(l)
 		if strings.Contains(lower, "class*=banner") || strings.Contains(lower, "id*=banner") ||
 			strings.Contains(lower, "class*=ad") || strings.Contains(lower, "class*=promo") ||
 			strings.Contains(lower, "id*=promo") {
-			t.Errorf("dangerous selector in generic_cosmetic_rules.txt: %s", l)
+			t.Errorf("dangerous selector: %s", l)
 		}
 	}
 }
 
-func TestFilterProviderRules(t *testing.T) {
-	data, err := os.ReadFile("../../app/src/main/assets/blocklist.txt")
+// Universal V1: blocklist должен давать ~49k валидных доменов
+func TestBlocklistCount(t *testing.T) {
+	data, err := os.ReadFile("../app/src/main/assets/blocklist.txt")
 	if err != nil {
 		t.Skip("blocklist not found")
 	}
