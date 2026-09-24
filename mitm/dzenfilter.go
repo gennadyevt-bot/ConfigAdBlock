@@ -1678,9 +1678,18 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		}
 		reqs++
 		// 5) Сетевой блокlist на уровне запроса (path-level)
-		if hit, rule := checkURL(sni, req.URL.Path); hit {
+		// Блокlist: проверяем ДО изменения req.Host — реальный req.Host + SNI + path+query
+		pathQuery := req.URL.EscapedPath()
+		if req.URL.RawQuery != "" {
+			pathQuery += "?" + req.URL.RawQuery
+		}
+		blocked, rule := checkURL(req.Host, pathQuery)
+		if !blocked && req.Host != sni {
+			blocked, rule = checkURL(sni, pathQuery)
+		}
+		if hit := blocked; hit {
 			atomic.AddInt64(&genericBlockedN, 1)
-			flowLog("GENERIC_BLOCKED url=" + sni + req.URL.Path + " rule=" + rule)
+			flowLog("GENERIC_BLOCKED host=" + req.Host + " sni=" + sni + " path=" + pathQuery + " rule=" + rule)
 			resp := &http.Response{
 				Status:     "403 Forbidden",
 				StatusCode: 403,

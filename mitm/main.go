@@ -121,6 +121,8 @@ func loadBlocklist(path string) {
 			continue
 		}
 		d = strings.TrimSuffix(d, ".")
+		// Поддомены совпадают с правилом родительского домена
+		// (уже покрывается итерацией по суффиксам в checkURL)
 		// ABP-формат: ||domain^ или ||domain/path
 		if strings.HasPrefix(d, "||") {
 			d = d[2:]

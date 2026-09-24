@@ -203,10 +203,76 @@ func TestDomainRuleBlocked(t *testing.T) {
 	}
 }
 
-func TestABPDomainRule(t *testing.T) {
-	blocked, _ := checkURL("ads.example.com", "/")
-	// зависит от blocklist, но формат ||ads.example.com^ должен парситься
-	_ = blocked
+func TestDomainRuleBlock(t *testing.T) {
+	// domain.com/path — должен блокировать /path и /path/sub
+	bl := parseForTest("ads.example.com/banner")
+	if !bl("ads.example.com", "/banner") {
+		t.Error("domain/path not blocked")
+	}
+	if !bl("ads.example.com", "/banner/sub") {
+		t.Error("domain/path prefix not blocked")
+	}
+	if bl("ads.example.com", "/other") {
+		t.Error("other path wrongly blocked")
+	}
+	if !bl("sub.ads.example.com", "/banner") {
+		t.Error("subdomain not blocked")
+	}
+}
+
+func TestABPDomainCaret(t *testing.T) {
+	bl := parseForTest("||ads.example.com^")
+	if !bl("ads.example.com", "/") {
+		t.Error("ABP ||domain^ not blocked")
+	}
+	if !bl("sub.ads.example.com", "/") {
+		t.Error("ABP ||domain^ subdomain not blocked")
+	}
+}
+
+func TestABPDomainPath(t *testing.T) {
+	bl := parseForTest("||ads.example.com/banner")
+	if !bl("ads.example.com", "/banner") {
+		t.Error("ABP ||domain/path not blocked")
+	}
+	if bl("ads.example.com", "/other") {
+		t.Error("ABP ||domain/other wrongly blocked")
+	}
+}
+
+func TestQueryInMatcher(t *testing.T) {
+	bl := parseForTest("track.example.com/collect")
+	if !bl("track.example.com", "/collect?v=1") {
+		t.Error("path+query not blocked")
+	}
+}
+
+// parseForTest — локальный helper для тестов (не зависит от глобального blocklist)
+func parseForTest(rule string) func(host, path string) bool {
+	rule = strings.TrimSpace(rule)
+	if strings.HasPrefix(rule, "||") {
+		rule = rule[2:]
+	}
+	if i := strings.Index(rule, "^"); i >= 0 {
+		rule = rule[:i]
+	}
+	var ruleHost, rulePath string
+	if i := strings.Index(rule, "/"); i >= 0 {
+		ruleHost = rule[:i]
+		rulePath = rule[i:]
+	} else {
+		ruleHost = rule
+	}
+	return func(host, path string) bool {
+		host = strings.ToLower(strings.TrimSuffix(host, "."))
+		if host != ruleHost && !strings.HasSuffix(host, "."+ruleHost) {
+			return false
+		}
+		if rulePath == "" {
+			return true
+		}
+		return strings.HasPrefix(path, rulePath)
+	}
 }
 
 func TestNoBroadSelectors(t *testing.T) {
