@@ -1518,3 +1518,238 @@ func dzenSuspectWalk(node interface{}, reqPath, jpath string, depth int) {
 		}
 	}
 }
+
+// ============================================================================
+// Universal V1: GENERIC HTTPS content MITM для обычных сайтов
+// Зеркало handleDzenMITM, но без Dzen-специфики (asset-endpoints, cosmetic
+// bridge, bypass-once логика). Использует те же certForName/sniffConn/filterHTML.
+// Fail-open на каждом этапе; TLS-отказ -> DIRECT bypass.
+// ============================================================================
+
+var (
+	genericMitmOKN        int64
+	genericMitmFailN      int64
+	genericHTMLFilteredN  int64
+	genericDirectBypassN  int64
+	genericBlockedN       int64
+)
+
+// isDoHHost - известные DNS-over-HTTPS хосты, не делаем MITM
+func isDoHHost(host string) bool {
+	h := strings.ToLower(host)
+	for _, d := range []string{"dns.google", "cloudflare-dns.com", "mozilla.cloudflare-dns.com", "dns.quad9.net", "doh.opendns.com", "dns.adguard.com", "dns.nextdns.io"} {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPinnedHost - известные pinning/h2-only хосты, не делаем MITM
+func isPinnedHost(host string) bool {
+	h := strings.ToLower(host)
+	for _, d := range []string{
+		"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com",
+		"googlevideo.com", "youtube.com", "ytimg.com",
+		"facebook.com", "fbcdn.net", "instagram.com", "cdninstagram.com",
+		"twitter.com", "twimg.com", "x.com",
+		"whatsapp.net", "whatsapp.com", "telegram.org", "t.me",
+		"apple.com", "icloud.com", "mzstatic.com",
+		"microsoft.com", "windows.net", "office.net", "live.com", "office365.com",
+		"amazon.com", "amazonaws.com", "cloudfront.net",
+		"netflix.com", "nflxvideo.net", "nflximg.net",
+		"spotify.com", "scdn.co",
+		"zoom.us",
+		"vk.com", "vk-cdn.net", "userapi.com",
+		"ok.ru", "okcdn.net",
+		"mail.ru", "mrcloud.net",
+		"avito.ru", "avito.st",
+	} {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleGenericMITM - generic HTTPS MITM для обычных сайтов.
+// Возвращает handled=true если взял соединение (успех или провал),
+// handled=false если нужно DIRECT bypass.
+func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok bool) {
+	// 1) Сетевой блокlist по SNI
+	if hit, rule := checkURL(sni, ""); hit {
+		atomic.AddInt64(&genericBlockedN, 1)
+		flowLog("GENERIC_BLOCKED sni=" + sni + " rule=" + rule)
+		return true, true
+	}
+	// 2) DoH - не делаем MITM
+	if isDoHHost(sni) {
+		atomic.AddInt64(&genericDirectBypassN, 1)
+		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=doh")
+		return false, false
+	}
+	// 3) Pinned/h2-only - не делаем MITM
+	if isPinnedHost(sni) {
+		atomic.AddInt64(&genericDirectBypassN, 1)
+		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=pinned")
+		return false, false
+	}
+	// 4) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
+	if alpn := peekClientHelloALPN(raw); alpn != "" && alpn != "http/1.1" && alpn != "" {
+		atomic.AddInt64(&genericDirectBypassN, 1)
+		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=alpn:" + alpn)
+		return false, false
+	}
+
+	flowLog("GENERIC_MITM_BEGIN host=" + sni)
+	leaf, err := certForName(sni)
+	if err != nil {
+		flowLog("GENERIC_MITM_FAIL ca:" + err.Error())
+		return false, false
+	}
+	handled = true
+	defer func() {
+		if r := recover(); r != nil {
+			flowLog(fmt.Sprintf("GENERIC_MITM_FAIL panic:%v", r))
+		}
+		_ = conn.Close()
+	}()
+
+	cfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
+		Certificates: []tls.Certificate{*leaf},
+	}
+	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
+	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
+	if err := tlsConn.Handshake(); err != nil {
+		atomic.AddInt64(&genericMitmFailN, 1)
+		es := err.Error()
+		flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es)
+		return true, false
+	}
+	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
+	atomic.AddInt64(&genericMitmOKN, 1)
+	flowLog("GENERIC_MITM_OK sni=" + sni)
+
+	br := bufio.NewReader(tlsConn)
+	reqs := 0
+	for {
+		_ = tlsConn.SetDeadline(time.Now().Add(8 * time.Second))
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			var ne net.Error
+			if errors.Is(err, io.EOF) || (errors.As(err, &ne) && ne.Timeout()) {
+				return true, true // benign idle close
+			}
+			flowLog(fmt.Sprintf("GENERIC_CONN_CLOSE sni=%s requests=%d reason=read:%v", sni, reqs, err))
+			return true, reqs > 0
+		}
+		reqs++
+		// 5) Сетевой блокlist на уровне запроса (path-level)
+		if hit, rule := checkURL(sni, req.URL.Path); hit {
+			atomic.AddInt64(&genericBlockedN, 1)
+			flowLog("GENERIC_BLOCKED url=" + sni + req.URL.Path + " rule=" + rule)
+			resp := &http.Response{
+				Status:     "403 Forbidden",
+				StatusCode: 403,
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("blocked by ConfigAdBlock")),
+				Request:    req,
+			}
+			_ = resp.Write(tlsConn)
+			continue
+		}
+		// 6) Proxy request to real upstream
+		upstream, err := dialTLS(sni)
+		if err != nil {
+			flowLog("GENERIC_MITM_FAIL dial sni=" + sni + " err=" + err.Error())
+			return true, false
+		}
+		req.RequestURI = ""
+		req.URL.Scheme = "https"
+		req.URL.Host = sni
+		req.Host = sni
+		req.Header.Set("Accept-Encoding", "identity")
+		_ = upstream.SetDeadline(time.Now().Add(30 * time.Second))
+		if err := req.Write(upstream); err != nil {
+			_ = upstream.Close()
+			flowLog("GENERIC_MITM_FAIL write sni=" + sni + " err=" + err.Error())
+			return true, false
+		}
+		// 7) Read upstream response
+		upBr := bufio.NewReader(upstream)
+		resp, err := http.ReadResponse(upBr, req)
+		if err != nil {
+			_ = upstream.Close()
+			flowLog("GENERIC_MITM_FAIL read sni=" + sni + " err=" + err.Error())
+			return true, false
+		}
+		// 8) HTML -> filterHTML
+		if isHTML(resp) {
+			atomic.AddInt64(&genericHTMLFilteredN, 1)
+			flowLog("GENERIC_HTML_FILTERED " + sni + req.URL.Path)
+			resp2 := filterHTML(resp)
+			_ = resp2.Write(tlsConn)
+		} else {
+			_ = resp.Write(tlsConn)
+		}
+		_ = upstream.Close()
+		// Drain body for keep-alive
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+}
+
+// peekClientHelloALPN - извлекает ALPN из raw ClientHello (упрощённо)
+func peekClientHelloALPN(raw []byte) string {
+	// Поиск "h2" или "http/1.1" в raw bytes
+	if len(raw) < 10 {
+		return ""
+	}
+	// Простой поиск: если находим "h2\x00" или "h2," раньше "http/1.1"
+	h2Idx := indexOf(raw, []byte("h2\x00"))
+	h2Idx2 := indexOf(raw, []byte("h2,"))
+	httpIdx := indexOf(raw, []byte("http/1.1"))
+	if h2Idx >= 0 || h2Idx2 >= 0 {
+		if httpIdx < 0 || (h2Idx >= 0 && h2Idx < httpIdx) || (h2Idx2 >= 0 && h2Idx2 < httpIdx) {
+			return "h2"
+		}
+	}
+	if httpIdx >= 0 {
+		return "http/1.1"
+	}
+	return ""
+}
+
+func indexOf(b, sub []byte) int {
+	for i := 0; i+len(sub) <= len(b); i++ {
+		if string(b[i:i+len(sub)]) == string(sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// dialTLS - подключение к реальному upstream через TLS (через protected socket)
+func dialTLS(sni string) (net.Conn, error) {
+	conn, err := dialTCP(net.JoinHostPort(sni, "443"))
+	if err != nil {
+		return nil, err
+	}
+	cfg := &tls.Config{
+		ServerName:         sni,
+		InsecureSkipVerify: false,
+		MinVersion:         tls.VersionTLS12,
+	}
+	tlsConn := tls.Client(conn, cfg)
+	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
+	if err := tlsConn.Handshake(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
+}

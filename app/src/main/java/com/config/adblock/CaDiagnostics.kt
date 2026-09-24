@@ -29,7 +29,7 @@ object CaDiagnostics {
     fun status(context: Context): CaStatus {
         val crt = File(context.filesDir, "ca.crt")
         val fileExists = crt.exists()
-        val fp = if (fileExists) sha256Hex(crt.readBytes()) else ""
+        val fp = if (fileExists) caFingerprintDer(crt.readBytes()) else ""
         var installedExact = false
         var older = 0
         try {
@@ -55,6 +55,20 @@ object CaDiagnostics {
 
     private fun sha256Hex(b: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+
+    // Universal V1: fingerprint ДЕР-сертификата (из PEM-decoded), не PEM-файла
+    private fun caFingerprintDer(pemBytes: ByteArray): String {
+        return try {
+            val pem = String(pemBytes)
+            val b64 = pem.replace("-----BEGIN CERTIFICATE-----", "")
+                .replace("-----END CERTIFICATE-----", "")
+                .replace("\s".toRegex(), "")
+            val der = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            sha256Hex(der)
+        } catch (e: Exception) {
+            sha256Hex(pemBytes)
+        }
+    }
 
     fun inspect(context: Context): String {
         return try {

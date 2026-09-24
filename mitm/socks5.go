@@ -150,6 +150,19 @@ func socksHandleConn(c net.Conn) {
 				}
 				// handled=false -> bypass: обычный direct ниже
 			}
+			// Universal V1: generic HTTPS MITM для обычных сайтов
+			if sni != "" && !isPinnedHost(sni) && !isDoHHost(sni) {
+				if handled, ok := handleGenericMITM(c, sni, raw); handled {
+					if ok {
+						atomic.AddInt64(&genericMitmOKN, 1)
+					} else {
+						atomic.AddInt64(&genericMitmFailN, 1)
+					}
+					return
+				}
+				atomic.AddInt64(&genericDirectBypassN, 1)
+				flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=mitm-fail")
+			}
 			if len(raw) > 0 {
 				if _, err := up.Write(raw); err != nil {
 					return

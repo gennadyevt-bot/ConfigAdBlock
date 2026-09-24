@@ -390,12 +390,19 @@ class MainActivity : AppCompatActivity() {
             running -> "● работает"
             else -> "○ выключен"
         }
-        val rulesCount = (prefs.getString("log", "") ?: "").lines().count { it.contains("YANDEX_CB_RULES_READY") }
+        val logTxt = prefs.getString("log", "") ?: ""
+        val gOK = logTxt.lines().count { it.contains("GENERIC_MITM_OK") }
+        val gFail = logTxt.lines().count { it.contains("GENERIC_MITM_FAIL") }
+        val gHTML = logTxt.lines().count { it.contains("GENERIC_HTML_FILTERED") }
+        val gBypass = logTxt.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
+        val gBlocked = logTxt.lines().count { it.contains("GENERIC_BLOCKED") }
+        val rulesCount = logTxt.lines().count { it.contains("YANDEX_CB_RULES_READY") }
         val rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
+        val genericStatus = if (gOK > 0) "● работает (MITM " + gOK + ", HTML " + gHTML + ")" else if (gBypass > 0) "○ bypass " + gBypass else "○ ожидание"
         stateHint.text = when {
             running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат (кнопка в настройках)."
             running && caMissing -> "Установите сертификат Config AdBlock — без него HTTPS-реклама не блокируется."
-            running -> "Сетевой фильтр: ● работает\nЯндекс.Браузер: " + cbStatus + "\nHTTPS-фильтр: " + httpsStatus + "\n" + rulesN
+            running -> "Сетевой фильтр: ● работает\nЯндекс.Браузер: " + cbStatus + "\nHTTPS-фильтр: " + httpsStatus + "\nGeneric MITM: " + genericStatus + "\n" + rulesN
             consentNeeded -> "Android попросит подтвердить подключение"
             else -> "Нажмите кнопку, чтобы убрать рекламу"
         }
