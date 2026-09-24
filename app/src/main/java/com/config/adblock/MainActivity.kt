@@ -421,8 +421,7 @@ class MainActivity : AppCompatActivity() {
         if (dnsAllow.isNotEmpty()) {
             logText = logText + "\n--- DNS_ALLOW (последние, сверху новые) ---\n" + dnsAllow
         }
-        // 222: Yandex Content Blocker - статус и кнопка настройки
-        val ybInstalled = try { packageManager.getPackageInfo("com.yandex.browser", 0); true } catch (_: Exception) { false }
+        // 222: Yandex Content Blocker - статус и кнопка настройки (ybInstalled объявлён выше)
         val cbServed = prefs.getInt("cb_served", 0)
         val cbRulesReady = (prefs.getString("log", "") ?: "").contains("YANDEX_CB_RULES_READY")
         try {
