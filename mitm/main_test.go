@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
