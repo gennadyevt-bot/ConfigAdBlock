@@ -3,13 +3,6 @@
 // Blocklist (domains) + cosmetic (CSS/JS) filtering in OnRequest/OnResponse.
 package mitm
 
-// Universal V1: счётчики фильтрации
-var blockedCount int64
-var bypassedCount int64
-var htmlFilteredCount int64
-var cosmeticInjectedCount int64
-
-
 import (
 	"bufio"
 	"crypto/tls"
@@ -26,6 +19,12 @@ import (
 
 	"github.com/elazarl/goproxy"
 )
+
+// Universal V1: счётчики фильтрации
+var blockedCount int64
+var bypassedCount int64
+var htmlFilteredCount int64
+var cosmeticInjectedCount int64
 
 // DoHHosts — DoH/DoT-эндпоинты: их НЕЛЬЗЯ MITM'ить (клиенты не доверяют
 // нашему CA -> "unknown certificate" -> DNS мёртв). Пакетный уровень:
