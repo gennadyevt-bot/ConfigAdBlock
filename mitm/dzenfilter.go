@@ -32,6 +32,8 @@ import (
 	"time"
 )
 
+import "golang.org/x/net/http2"
+
 const dzenFakeIP = "10.0.0.3"
 
 // CSS из cosmetic_rules.txt (слой Kotlin держит полный парсер; для
@@ -747,7 +749,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	}()
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
+		NextProtos:   []string{"h2", "http/1.1"},
 		Certificates: []tls.Certificate{*leaf},
 	}
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
@@ -1643,12 +1645,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=runtime-bypass")
 		return false, false
 	}
-	// 5) h2-only (ALPN не содержит http/1.1) - не делаем MITM (parser умеет только HTTP/1.1)
-	if alpn := peekClientHelloALPN(raw); alpn == "h2" {
-		atomic.AddInt64(&genericDirectBypassN, 1)
-		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=alpn:" + alpn)
-		return false, false
-	}
+	// h2 больше не bypass — MITM принимает h2 через handleGenericH2
 
 	flowLog("GENERIC_MITM_BEGIN host=" + sni)
 	leaf, err := certForName(sni)
@@ -1666,7 +1663,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
+		NextProtos:   []string{"h2", "http/1.1"},
 		Certificates: []tls.Certificate{*leaf},
 	}
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
@@ -1686,6 +1683,11 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	atomic.AddInt64(&genericMitmOKN, 1)
 	flowLog("GENERIC_MITM_OK sni=" + sni)
+
+	// h2 -> HTTP/2 handler, http/1.1 -> существующий pipeline
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+		return true, handleGenericH2(tlsConn, sni)
+	}
 
 	br := bufio.NewReader(tlsConn)
 	reqs := 0
@@ -1889,4 +1891,99 @@ func dialTLS(sni string) (net.Conn, error) {
 		return nil, err
 	}
 	return tlsConn, nil
+}
+
+// handleGenericH2 - HTTP/2 handler для generic MITM.
+// Принимает h2 от клиента, upstream остаётся HTTP/1.1.
+// Для каждого запроса: checkURL(host,path+query) -> BLOCK или upstream -> filterHTML если HTML.
+func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
+	flowLog("GENERIC_H2_REQ sni=" + sni)
+	h2s := &http2.Server{}
+	h2srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pathQuery := r.URL.EscapedPath()
+			if r.URL.RawQuery != "" {
+				pathQuery += "?" + r.URL.RawQuery
+			}
+			if hit, rule := checkURL(r.Host, pathQuery); hit {
+				flowLog("GENERIC_H2_BLOCKED host=" + r.Host + " path=" + pathQuery + " rule=" + rule)
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, "blocked")
+				return
+			}
+			if hit, _ := checkURL(sni, pathQuery); hit && sni != r.Host {
+				flowLog("GENERIC_H2_BLOCKED sni=" + sni + " path=" + pathQuery)
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, "blocked")
+				return
+			}
+			// upstream через HTTP/1.1
+			upReq := r.Clone(r.Context())
+			upReq.RequestURI = ""
+			upReq.URL.Scheme = "https"
+			upReq.URL.Host = r.Host
+			upReq.Host = r.Host
+			upReq.Header.Set("Accept-Encoding", "identity")
+			upReq.Header.Del("Connection")
+			upReq.Header.Del("Upgrade")
+			upReq.Header.Del("HTTP2-Settings")
+			transport := &http.Transport{
+				TLSClientConfig: &tls.Config{ServerName: r.Host, MinVersion: tls.VersionTLS12},
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialTCP(addr)
+				},
+			}
+			resp, err := transport.RoundTrip(upReq)
+			if err != nil {
+				flowLog("GENERIC_H2_FAIL upstream host=" + r.Host + " err=" + err.Error())
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+			// headers
+			for k, vv := range resp.Header {
+				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") {
+					continue
+				}
+				w.Header()[k] = vv
+			}
+			// HTML -> filterHTML
+			ct := resp.Header.Get("Content-Type")
+			if strings.Contains(ct, "text/html") {
+				body, err := io.ReadAll(resp.Body)
+				if err == nil {
+					flowLog("GENERIC_H2_HTML_FILTERED host=" + r.Host + " path=" + pathQuery)
+					body = injectCosmeticBytes(body)
+					w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+					w.WriteHeader(resp.StatusCode)
+					w.Write(body)
+					return
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			io.Copy(w, resp.Body)
+		}),
+	}
+	err := h2s.ServeConn(tlsConn, &http2.ServeConnOpts{Handler: h2srv.Handler})
+	if err != nil {
+		flowLog("GENERIC_H2_FAIL serve sni=" + sni + " err=" + err.Error())
+		return false
+	}
+	return true
+}
+
+// injectCosmeticBytes - применить cosmetic inject к HTML body
+func injectCosmeticBytes(body []byte) []byte {
+	if len(cosmeticInject) == 0 {
+		return body
+	}
+	idx := bytes.Index(bytes.ToLower(body), []byte("</head>"))
+	if idx < 0 {
+		return body
+	}
+	out := make([]byte, 0, len(body)+len(cosmeticInject))
+	out = append(out, body[:idx]...)
+	out = append(out, cosmeticInject...)
+	out = append(out, body[idx:]...)
+	return out
 }

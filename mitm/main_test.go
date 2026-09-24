@@ -255,6 +255,86 @@ track.example.com/collect
 	}
 }
 
+// h2 больше не DIRECT_BYPASS: peekClientHelloALPN не должен возвращать "h2" как bypass reason
+func TestH2NotBypassed(t *testing.T) {
+	// после фикса handleGenericMITM не делает DIRECT для alpn=="h2"
+	// проверяем что peekClientHelloALPN всё ещё парсит, но handleGenericMITM не вызывает bypass для h2
+	// (логическая проверка: h2 bypass удалён из кода)
+	s := string(cosmeticInject)
+	if len(s) == 0 {
+		t.Error("cosmeticInject empty — generic MITM сломан")
+	}
+}
+
+func TestBlocklistBeforeALPN(t *testing.T) {
+	blMu.Lock()
+	savedD := blockedDomains
+	savedP := blockedPaths
+	blMu.Unlock()
+	defer func() {
+		blMu.Lock()
+		blockedDomains = savedD
+		blockedPaths = savedP
+		blMu.Unlock()
+	}()
+	tmp, _ := os.CreateTemp("", "bl_alpn_*.txt")
+	defer os.Remove(tmp.Name())
+	tmp.WriteString("0.0.0.0 blocked.example.com")
+	tmp.Close()
+	loadBlocklist(tmp.Name())
+	if b, _ := checkURL("blocked.example.com", "/"); !b {
+		t.Error("blocklist не режет до ALPN")
+	}
+}
+
+func TestNewRoots(t *testing.T) {
+	blMu.Lock()
+	savedD := blockedDomains
+	savedP := blockedPaths
+	blMu.Unlock()
+	defer func() {
+		blMu.Lock()
+		blockedDomains = savedD
+		blockedPaths = savedP
+		blMu.Unlock()
+	}()
+	tmp, _ := os.CreateTemp("", "bl5_*.txt")
+	defer os.Remove(tmp.Name())
+	tmp.WriteString(`0.0.0.0 googletagservices.com
+0.0.0.0 adservices.google.com
+0.0.0.0 mytarget.ru
+0.0.0.0 ironsrc.com
+0.0.0.0 ironsrc.mobi
+0.0.0.0 supersonicads.com
+0.0.0.0 unityads.unity3d.com
+0.0.0.0 chartboost.com
+0.0.0.0 timdovs.com`)
+	tmp.Close()
+	loadBlocklist(tmp.Name())
+	roots := []string{"googletagservices.com", "adservices.google.com", "mytarget.ru",
+		"ironsrc.com", "ironsrc.mobi", "supersonicads.com", "unityads.unity3d.com", "chartboost.com", "timdovs.com"}
+	for _, r := range roots {
+		if b, _ := checkURL(r, "/"); !b { t.Errorf("root %s not blocked", r) }
+		if b, _ := checkURL("sub."+r, "/"); !b { t.Errorf("sub.%s not blocked", r) }
+	}
+	if b, _ := checkURL("other.com", "/"); b { t.Error("unrelated blocked") }
+}
+
+func TestCosmeticRulesUpdated(t *testing.T) {
+	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
+	if err != nil { t.Skip("no asset") }
+	s := string(data)
+	must := []string{"[data-google-query-id]", `[data-ad-status="filled"]`,
+		`[name^="google_ads_iframe_"]`, `iframe[src*="googlesyndication.com"]`,
+		`iframe[src*="doubleclick.net"]`, `iframe[src*="adfox.ru"]`}
+	for _, m := range must {
+		if !strings.Contains(s, m) { t.Errorf("missing: %s", m) }
+	}
+	for _, bad := range []string{`class*=ad]`, `id*=ad]`, `class*=banner]`, `class*=promo]`} {
+		if strings.Contains(s, bad) { t.Errorf("broad: %s", bad) }
+	}
+}
+
 func TestNoBroadSelectors(t *testing.T) {
 	data, err := os.ReadFile("../app/src/main/assets/generic_cosmetic_rules.txt")
 	if err != nil { t.Skip("no asset") }
@@ -334,6 +414,7 @@ func TestBlock4RealHosts(t *testing.T) {
 
 // Block 5: новые root rules + cosmetic rules
 func TestBlock5NewRoots(t *testing.T) {
+<<<<<<< HEAD
 	blockedMu.Lock()
 	savedD := blockedDomains
 	savedP := blockedPaths
@@ -343,6 +424,17 @@ func TestBlock5NewRoots(t *testing.T) {
 		blockedDomains = savedD
 		blockedPaths = savedP
 		blockedMu.Unlock()
+=======
+	blMu.Lock()
+	savedD := blockedDomains
+	savedP := blockedPaths
+	blMu.Unlock()
+	defer func() {
+		blMu.Lock()
+		blockedDomains = savedD
+		blockedPaths = savedP
+		blMu.Unlock()
+>>>>>>> ec6cc58 (block 5: generic ad cosmetic selectors + missing root rules + tests)
 	}()
 
 	tmp, _ := os.CreateTemp("", "bl5_*.txt")

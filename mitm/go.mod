@@ -3,6 +3,7 @@ module configadblock/mitm
 go 1.26
 
 require (
+	golang.org/x/net v0.35.0
 	github.com/elazarl/goproxy v1.9.1
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 )
