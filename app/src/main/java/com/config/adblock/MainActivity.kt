@@ -382,6 +382,7 @@ class MainActivity : AppCompatActivity() {
             else -> "AdBlock: выключен"
         }
         val cbServedN = prefs.getInt("cb_served", 0)
+        val ybInstalled = try { packageManager.getPackageInfo("com.yandex.browser", 0); true } catch (_: Exception) { false }
         val cbStatus = if (cbServedN > 0) "● подключён" else if (ybInstalled) "○ найден, требуется подключение" else "○ не найден"
         val httpsStatus = when {
             running && caReject -> "○ сертификат не принят"

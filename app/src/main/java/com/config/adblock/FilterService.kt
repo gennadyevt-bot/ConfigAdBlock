@@ -85,8 +85,16 @@ class FilterService : VpnService() {
         if (!isRunning) {
             running = true
             isRunning = true
-            // Universal V1: выставляем путь к assets для Go (cosmetic rules)
-            runCatching { mitm.Mitm.setAssetDir(filesDir.absolutePath) }
+            // Universal V1: копируем cosmetic rules из APK assets в filesDir, затем путь для Go
+            try {
+                val out = java.io.File(filesDir, "generic_cosmetic_rules.txt")
+                if (!out.exists()) {
+                    assets.open("generic_cosmetic_rules.txt").use { input ->
+                        java.io.FileOutputStream(out).use { input.copyTo(it) }
+                    }
+                }
+                runCatching { mitm.Mitm.setAssetDir(filesDir.absolutePath) }
+            } catch (_: Exception) { runCatching { mitm.Mitm.setAssetDir(filesDir.absolutePath) } }
             thread { if (emptyMode) runEmptyVpn() else if (httpsMode) runHevTransport() else runFilter() }
         }
         return START_NOT_STICKY
