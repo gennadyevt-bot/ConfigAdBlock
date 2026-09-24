@@ -266,3 +266,28 @@ func TestNoBroadSelectors(t *testing.T) {
 		}
 	}
 }
+
+// Block 3: isCertRejectError tests
+func TestCertRejectError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("tls: unknown certificate"), true},
+		{fmt.Errorf("tls: bad certificate"), true},
+		{fmt.Errorf("tls: certificate unknown"), true},
+		{fmt.Errorf("tls: unknown ca"), true},
+		{fmt.Errorf("tls: certificate verify failure"), true},
+		{fmt.Errorf("tls: certificate signed by unknown authority"), true},
+		{fmt.Errorf("i/o timeout"), false},
+		{fmt.Errorf("EOF"), false},
+		{fmt.Errorf("connection reset by peer"), false},
+		{fmt.Errorf("read: connection timed out"), false},
+	}
+	for _, c := range cases {
+		got := isCertRejectError(c.err)
+		if got != c.want {
+			t.Errorf("isCertRejectError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}

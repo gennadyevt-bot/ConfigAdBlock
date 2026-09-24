@@ -1547,20 +1547,40 @@ func isDoHHost(host string) bool {
 	return false
 }
 
-// isGoogleAdsHost - рекламные домены Google, которые НЕ должны быть pinned
-func isGoogleAdsHost(host string) bool {
+// isAdsHost - рекламные домены, НЕ должны быть pinned/static-bypass
+func isAdsHost(host string) bool {
 	h := strings.ToLower(host)
 	for _, d := range []string{
+		// Google
 		"googlesyndication.com", "doubleclick.net", "googleadservices.com",
 		"googletagservices.com", "adservice.google.com", "ads.google.com",
-		"pagead2.googlesyndication.com", "tpc.googlesyndication.com",
 		"adservices.google.com", "google-analytics.com", "googletagmanager.com",
+		// Yandex
+		"an.yandex.ru", "adfox.ru", "yandexadexchange.net", "mytarget.ru",
+		// Общие
+		"ads.twitter.com", "ads.linkedin.com", "ads.reddit.com",
+		"amazon-adsystem.com", "adsystem.amazon.com",
+		"ads.fb.com", "an.facebook.com",
 	} {
 		if h == d || strings.HasSuffix(h, "."+d) {
 			return true
 		}
 	}
 	return false
+}
+
+// isCertRejectError - только явный отказ сертификата/CA
+func isCertRejectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	es := strings.ToLower(err.Error())
+	return strings.Contains(es, "unknown certificate") ||
+		strings.Contains(es, "bad certificate") ||
+		strings.Contains(es, "certificate unknown") ||
+		strings.Contains(es, "unknown ca") ||
+		strings.Contains(es, "certificate verify failure") ||
+		strings.Contains(es, "certificate signed by unknown authority")
 }
 
 // isPinnedHost - известные pinning/h2-only хосты, не делаем MITM
@@ -1610,8 +1630,8 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	}
 	// 3) Pinned/h2-only - не делаем MITM
 	// Рекламные домены Google — НЕ pinned, фильтруем через blocklist
-	if isGoogleAdsHost(sni) {
-		// не pinned, идём дальше к MITM/blocklist
+	if isAdsHost(sni) {
+		// рекламный домен — blocklist до MITM, не pinned
 	} else if isPinnedHost(sni) {
 		atomic.AddInt64(&genericDirectBypassN, 1)
 		flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=pinned")
@@ -1654,9 +1674,13 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	if err := tlsConn.Handshake(); err != nil {
 		atomic.AddInt64(&genericMitmFailN, 1)
 		es := err.Error()
-		// runtime bypass: host реально отверг CA/pinning
-		runtimeBypass.Store(sni, true)
-		flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es + " -> runtime-bypass")
+		// runtime bypass только при явном cert reject, не при timeout/EOF
+		if isCertRejectError(err) {
+			runtimeBypass.Store(sni, true)
+			flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es + " -> runtime-bypass")
+		} else {
+			flowLog("GENERIC_MITM_FAIL tls sni=" + sni + " err=" + es)
+		}
 		return true, false
 	}
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))

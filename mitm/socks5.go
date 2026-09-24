@@ -152,8 +152,9 @@ func socksHandleConn(c net.Conn) {
 				}
 				// handled=false -> bypass: обычный direct ниже
 			}
-			// Universal V1: generic HTTPS MITM для обычных сайтов
-			if sni != "" && !isPinnedHost(sni) && !isDoHHost(sni) {
+			// Universal V1: generic MITM для ЛЮБОГО непустого SNI.
+			// Все решения block/DoH/pinned/runtime-bypass — только внутри handleGenericMITM.
+			if sni != "" {
 				if handled, ok := handleGenericMITM(c, sni, raw); handled {
 					if ok {
 						atomic.AddInt64(&genericMitmOKN, 1)
