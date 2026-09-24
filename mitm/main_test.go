@@ -203,75 +203,54 @@ func TestDomainRuleBlocked(t *testing.T) {
 	}
 }
 
-func TestDomainRuleBlock(t *testing.T) {
-	// domain.com/path — должен блокировать /path и /path/sub
-	bl := parseForTest("ads.example.com/banner")
-	if !bl("ads.example.com", "/banner") {
-		t.Error("domain/path not blocked")
-	}
-	if !bl("ads.example.com", "/banner/sub") {
-		t.Error("domain/path prefix not blocked")
-	}
-	if bl("ads.example.com", "/other") {
-		t.Error("other path wrongly blocked")
-	}
-	if !bl("sub.ads.example.com", "/banner") {
-		t.Error("subdomain not blocked")
-	}
-}
+func TestBlock2RealMatcher(t *testing.T) {
+	// Сохраняем исходное состояние
+	blockedMu.Lock()
+	savedDomains := blockedDomains
+	savedPaths := blockedPaths
+	blockedMu.Unlock()
 
-func TestABPDomainCaret(t *testing.T) {
-	bl := parseForTest("||ads.example.com^")
-	if !bl("ads.example.com", "/") {
-		t.Error("ABP ||domain^ not blocked")
-	}
-	if !bl("sub.ads.example.com", "/") {
-		t.Error("ABP ||domain^ subdomain not blocked")
-	}
-}
+	// Временный test blocklist
+	tmp, err := os.CreateTemp("", "blocklist_test_*.txt")
+	if err != nil { t.Fatal(err) }
+	defer os.Remove(tmp.Name())
+	rules := `ads.example.com
+track.example.com/collect
+||abp.example.com^
+||path.example.com/banner`
+	tmp.WriteString(rules)
+	tmp.Close()
 
-func TestABPDomainPath(t *testing.T) {
-	bl := parseForTest("||ads.example.com/banner")
-	if !bl("ads.example.com", "/banner") {
-		t.Error("ABP ||domain/path not blocked")
-	}
-	if bl("ads.example.com", "/other") {
-		t.Error("ABP ||domain/other wrongly blocked")
-	}
-}
+	// Загружаем временный blocklist
+	loadBlocklist(tmp.Name())
 
-func TestQueryInMatcher(t *testing.T) {
-	bl := parseForTest("track.example.com/collect")
-	if !bl("track.example.com", "/collect?v=1") {
-		t.Error("path+query not blocked")
-	}
-}
+	// Восстанавливаем после теста
+	defer func() {
+		blockedMu.Lock()
+		blockedDomains = savedDomains
+		blockedPaths = savedPaths
+		blockedMu.Unlock()
+	}()
 
-// parseForTest — локальный helper для тестов (не зависит от глобального blocklist)
-func parseForTest(rule string) func(host, path string) bool {
-	rule = strings.TrimSpace(rule)
-	if strings.HasPrefix(rule, "||") {
-		rule = rule[2:]
+	cases := []struct {
+		host, path string
+		wantBlock  bool
+	}{
+		{"ads.example.com", "/", true},           // 1
+		{"sub.ads.example.com", "/", true},       // 2
+		{"track.example.com", "/collect", true},  // 3
+		{"track.example.com", "/other", false},   // 4
+		{"abp.example.com", "/", true},           // 5
+		{"sub.abp.example.com", "/", true},       // 6
+		{"path.example.com", "/banner/x", true},  // 7
+		{"path.example.com", "/other", false},    // 8
+		{"track.example.com", "/collect?v=1", true}, // 9 path+query
 	}
-	if i := strings.Index(rule, "^"); i >= 0 {
-		rule = rule[:i]
-	}
-	var ruleHost, rulePath string
-	if i := strings.Index(rule, "/"); i >= 0 {
-		ruleHost = rule[:i]
-		rulePath = rule[i:]
-	} else {
-		ruleHost = rule
-	}
-	return func(host, path string) bool {
-		host = strings.ToLower(strings.TrimSuffix(host, "."))
-		if host != ruleHost && !strings.HasSuffix(host, "."+ruleHost) {
-			return false
+	for _, c := range cases {
+		got, _ := checkURL(c.host, c.path)
+		if got != c.wantBlock {
+			t.Errorf("checkURL(%q, %q) = %v, want %v", c.host, c.path, got, c.wantBlock)
 		}
-		if rulePath == "" {
-			return true
-		}
-		return strings.HasPrefix(path, rulePath)
 	}
 }
 
