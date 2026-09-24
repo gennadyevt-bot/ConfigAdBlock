@@ -98,9 +98,9 @@ function findMark(root){
 		for(var up=0;up<8&&el.parentElement;up++){
 			el=el.parentElement;
 			var tag=(el.tagName||'').toUpperCase();
-			if(tag==='BODY'||tag==='HTML'||tag==='MAIN'||tag==='ARTICLE')return;
+			if(tag==='BODY'||tag==='HTML'||tag==='MAIN'||tag==='ARTICLE')break;
 			var r=el.getBoundingClientRect();
-			if(r.width<200&&r.height<100){hide(el);return;}
+			if(r.width<200&&r.height<100){hide(el);break;}
 		}
 	}
 }
@@ -114,10 +114,6 @@ var obs=new MutationObserver(function(muts){
 		if(!nodes)continue;
 		for(var n=0;n<nodes.length;n++){
 			scan(nodes[n]);
-			if(nodes[n].querySelectorAll){
-				var desc=nodes[n].querySelectorAll('*');
-				for(var d=0;d<desc.length;d++)scan(desc[d]);
-			}
 		}
 	}
 });
@@ -204,7 +200,6 @@ func stripCSPMeta(body []byte) []byte {
 			break
 		}
 		absIdx := pos + idx
-		// найти конец тега
 		end := absIdx
 		for end < len(body) && body[end] != '>' {
 			end++
@@ -214,23 +209,12 @@ func stripCSPMeta(body []byte) []byte {
 			break
 		}
 		tag := lower[absIdx:end]
-		if bytes.Contains(tag, []byte("content-security-policy")) {
-			// удалить этот meta tag, сохранить всё остальное
-			out = append(out, body[pos:absIdx]...)
-			out = append(out, body[end+1:]...)
-			// пересобрать lower для следующей итерации
-			body = out
-			lower = bytes.ToLower(body)
-			out = nil
-			pos = 0
-		} else {
-			// обычный meta — сохранить, продолжить после него
-			out = append(out, body[pos:absIdx]...)
-			pos = end + 1
+		// копируем всё до meta + сам meta (если не CSP)
+		out = append(out, body[pos:absIdx]...)
+		if !bytes.Contains(tag, []byte("content-security-policy")) {
+			out = append(out, body[absIdx:end+1]...)
 		}
-	}
-	if out == nil {
-		return body
+		pos = end + 1
 	}
 	return out
 }
