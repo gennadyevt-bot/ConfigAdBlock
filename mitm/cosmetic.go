@@ -133,7 +133,22 @@ function findMark(root){
 		if(best)hide(best);
 	}
 }
-function scan(root){hideSel(root);findMark(root);}
+// Yandex Direct native-card: маркер в элементе/потомках -> подъём до 10 parentElement,
+// первый контейнер, где textContent содержит И "Реклама" И маркер -> hide().
+// Без новых CSS-селекторов. Вызывается из scan() (первый проход + MutationObserver).
+function hideDirectCard(root){
+	var marker='Рекламодатель: Яндекс.Директ';
+	var adword='Реклама';
+	if(!root||root.nodeType!==1)return;
+	if((root.textContent||'').indexOf(marker)<0)return;
+	var el=root;
+	for(var i=0;i<10&&el;i++){
+		var t=el.textContent||'';
+		if(t.indexOf(adword)>=0&&t.indexOf(marker)>=0){hide(el);return;}
+		el=el.parentElement;
+	}
+}
+function scan(root){hideDirectCard(root);hideSel(root);findMark(root);}
 // один полный проход при старте
 scan(document.documentElement);
 // дальше только addedNodes
