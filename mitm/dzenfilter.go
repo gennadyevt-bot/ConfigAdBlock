@@ -1793,7 +1793,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 				(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
 			if block {
 				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery + " hits=" + strings.Join(hits, ","))
-				jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
+				jsBlocked := `(function(){var s=document.currentScript;function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagName+' id='+(el.id||'-')+' class='+String(el.className||'-').slice(0,60)+' w='+Math.round(r.width)+' h='+Math.round(r.height);}if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));try{fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}})();`
 				blockResp := &http.Response{
 					Status:        "200 OK",
 					StatusCode:    200,
@@ -2074,7 +2074,7 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 					(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
 				if block {
 					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath() + " hits=" + strings.Join(hits, ","))
-					jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
+					jsBlocked := `(function(){var s=document.currentScript;function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagName+' id='+(el.id||'-')+' class='+String(el.className||'-').slice(0,60)+' w='+Math.round(r.width)+' h='+Math.round(r.height);}if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));try{fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}})();`
 					w.Header().Set("Content-Type", "application/javascript")
 					w.Header().Set("Content-Length", strconv.Itoa(len(jsBlocked)))
 					w.WriteHeader(http.StatusOK)

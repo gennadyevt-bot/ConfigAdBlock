@@ -96,34 +96,6 @@ function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
 // служебный runtime-probe: MITM перехватывает /__cab_probe, в интернет не уходит
 function probe(ev){try{fetch('/__cab_probe?ev='+ev,{cache:'no-store'}).catch(function(){});}catch(e){}}
 probe('start');
-// AD_PAYLOAD_BLOCK marker: 2 секунды логируем DOM-кандидатов рядом с центром viewport.
-// Только видимые крупные контейнеры, максимум 10, без body/HTML dump.
-window.addEventListener('__cab_ad_blocked',function(){
-	var t0=Date.now(),n=0,max=10;
-	var cx=window.innerWidth/2,cy=window.innerHeight/2;
-	var timer=setInterval(function(){
-		if(Date.now()-t0>2000||n>=max){clearInterval(timer);return;}
-		var stack=document.elementsFromPoint(cx,cy);
-		var batch=[];
-		for(var i=0;i<stack.length&&n<max;i++){
-			var el=stack[i];
-			if(!el||el.nodeType!==1||el.__cabProbe)continue;
-			var r=el.getBoundingClientRect();
-			if(r.width<100||r.height<100)continue;
-			var st=getComputedStyle(el);
-			if(st.display==='none'||st.visibility==='hidden')continue;
-			el.__cabProbe=1;
-			var item={tag:el.tagName,id:el.id||'',cls:String(el.className||'').slice(0,80),w:Math.round(r.width),h:Math.round(r.height),parents:[]};
-			var pp=el.parentElement;
-			for(var k=0;k<3&&pp;k++){
-				item.parents.push(pp.tagName+(pp.id?'#'+pp.id:'')+(pp.className?'.'+String(pp.className).split(' ').slice(0,2).join('.'):''));
-				pp=pp.parentElement;
-			}
-			batch.push(item);n++;
-		}
-		if(batch.length)probe('cand='+encodeURIComponent(JSON.stringify(batch)));
-	},250);
-});
 function isAdSign(el){return el&&el.matches&&el.matches(SELS);}
 // рекламный маркер: точное совпадение ИЛИ начало "Реклама ·"/"Реклама "
 // (аналогично Advertisement / Sponsored). Точный MARKS.indexOf не требуем.
