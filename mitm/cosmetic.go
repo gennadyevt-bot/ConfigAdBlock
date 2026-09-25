@@ -94,6 +94,15 @@ function hideSel(root){
 }
 function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
 function isAdSign(el){return el&&el.matches&&el.matches(SELS);}
+// рекламный маркер: точное совпадение ИЛИ начало "Реклама ·"/"Реклама "
+// (аналогично Advertisement / Sponsored). Точный MARKS.indexOf не требуем.
+function isAdMark(t){
+	for(var m=0;m<MARKS.length;m++){
+		var b=MARKS[m];
+		if(t===b||t.indexOf(b+' ·')===0||t.indexOf(b+' ')===0)return true;
+	}
+	return false;
+}
 function findMark(root){
 	if(!root)return;
 	var all=[];
@@ -105,7 +114,7 @@ function findMark(root){
 	}
 	for(var i=0;i<all.length;i++){
 		var t=norm(all[i].textContent);
-		if(MARKS.indexOf(t)<0)continue;
+		if(!isAdMark(t))continue;
 		var el=all[i];
 		var best=null;
 		for(var up=0;up<6&&el.parentElement;up++){
