@@ -301,30 +301,39 @@ class MainActivity : AppCompatActivity() {
     // "других CA с тем же именем: 5" - чтобы отличить текущий от старых).
     private var caTwinsCache = ""
     private var caTwinsCacheAt = 0L
-    private fun caTwinsLine(): String {
-        // не чаще раза в 60 секунд (UI thread защита)
-        val now = System.currentTimeMillis()
-        if (caTwinsCache.isNotEmpty() && now - caTwinsCacheAt < 60_000) return caTwinsCache
-        val line = try {
-            val tf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-            tf.init(null as java.security.KeyStore?)
-            val tm = tf.trustManagers[0] as X509TrustManager
-            val sb = StringBuilder()
-            var n = 0
-            for (c in tm.acceptedIssuers) {
-                if (c.subjectX500Principal.name.contains("Config AdBlock")) {
-                    n++
-                    val d = java.security.MessageDigest.getInstance("SHA-256").digest(c.encoded)
-                    sb.append(String.format("%02X%02X%02X... ", d[0], d[1], d[2]))
+
+    // п.2: сканирование AndroidCAStore — ОДИН раз в background при onResume,
+    // результат в prefs + memory-cache. Из updateUi() только чтение.
+    private fun refreshCaTwinsLine() {
+        thread {
+            val line = try {
+                val tf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+                tf.init(null as java.security.KeyStore?)
+                val tm = tf.trustManagers[0] as X509TrustManager
+                val sb = StringBuilder()
+                var n = 0
+                for (c in tm.acceptedIssuers) {
+                    if (c.subjectX500Principal.name.contains("Config AdBlock")) {
+                        n++
+                        val d = java.security.MessageDigest.getInstance("SHA-256").digest(c.encoded)
+                        sb.append(String.format("%02X%02X%02X... ", d[0], d[1], d[2]))
+                    }
                 }
+                "SAME-NAME CA count=" + n + " prefixes: " + (if (sb.isEmpty()) "-" else sb.toString()) + "\n"
+            } catch (e: Exception) {
+                "SAME-NAME CA scan fail: " + (e.message ?: "?") + "\n"
             }
-            "SAME-NAME CA count=" + n + " prefixes: " + (if (sb.isEmpty()) "-" else sb.toString()) + "\n"
-        } catch (e: Exception) {
-            "SAME-NAME CA scan fail: " + (e.message ?: "?") + "\n"
+            prefs.edit().putString("ca_twins", line).apply()
+            caTwinsCache = line
+            caTwinsCacheAt = System.currentTimeMillis()
         }
-        caTwinsCache = line
-        caTwinsCacheAt = now
-        return line
+    }
+
+    // вызывается из updateUi(): НИКАКОГО сканирования CAStore — только cache/prefs
+    private fun caTwinsLine(): String {
+        if (caTwinsCache.isNotEmpty()) return caTwinsCache
+        caTwinsCache = prefs.getString("ca_twins", "") ?: ""
+        return caTwinsCache
     }
 
     private fun saveStopToLog() {
@@ -347,35 +356,43 @@ class MainActivity : AppCompatActivity() {
     // пересоздаётся — только чтение файла + сверка с AndroidCAStore.
     private var caStatusLogged = false
     private var caDupLogged = false
+    // п.1: НЕ на UI thread. Результат в prefs, UI — через runOnUiThread.
     private fun checkCa() {
-        try {
-            val st = CaDiagnostics.status(this)
-            prefs.edit()
-                .putBoolean("ca_missing", st.fileExists && !st.installedExact)
-                .putBoolean("ca_engine_match", st.engineMatchesFile)
-                .apply()
-            if (!caStatusLogged) {
-                caStatusLogged = true
-                FilterService().saveErr("CA_FILE_FP=" + (if (st.fingerprint.isEmpty()) "none" else st.fingerprint))
-                FilterService().saveErr("CA_ANDROID_EXACT=" + st.installedExact)
-                FilterService().saveErr("CA_ENGINE_MATCH=" + st.engineMatchesFile)
-            }
-            if (st.olderSameName > 0 && !caDupLogged) {
-                caDupLogged = true
-                FilterService().saveErr("CA_OLD_DUPLICATES count=" + st.olderSameName)
-            }
-        } catch (_: Exception) {}
+        thread {
+            try {
+                val st = CaDiagnostics.status(this)
+                prefs.edit()
+                    .putBoolean("ca_missing", st.fileExists && !st.installedExact)
+                    .putBoolean("ca_engine_match", st.engineMatchesFile)
+                    .apply()
+                if (!caStatusLogged) {
+                    caStatusLogged = true
+                    FilterService().saveErr("CA_FILE_FP=" + (if (st.fingerprint.isEmpty()) "none" else st.fingerprint))
+                    FilterService().saveErr("CA_ANDROID_EXACT=" + st.installedExact)
+                    FilterService().saveErr("CA_ENGINE_MATCH=" + st.engineMatchesFile)
+                }
+                if (st.olderSameName > 0 && !caDupLogged) {
+                    caDupLogged = true
+                    FilterService().saveErr("CA_OLD_DUPLICATES count=" + st.olderSameName)
+                }
+                runOnUiThread {
+                    // предупреждение об установке CA + свежий UI после записи prefs
+                    if (prefs.getBoolean("ca_missing", false)) {
+                        try {
+                            findViewById<android.view.View>(R.id.settingsContent).visibility = android.view.View.VISIBLE
+                            findViewById<android.widget.TextView>(R.id.btnSettingsExpand).text = "Настройки  ⌄"
+                            findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCert).text = "⚠ Установить сертификат (обязательно)"
+                        } catch (_: Exception) {}
+                    }
+                    updateUi()
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     private fun startFilter() {
-        checkCa()
-        if (prefs.getBoolean("ca_missing", false)) {
-            try {
-                findViewById<android.view.View>(R.id.settingsContent).visibility = android.view.View.VISIBLE
-                findViewById<android.widget.TextView>(R.id.btnSettingsExpand).text = "Настройки  ⌄"
-                findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCert).text = "⚠ Установить сертификат (обязательно)"
-            } catch (_: Exception) {}
-        }
+        // п.3: кнопка реагирует сразу — сервис стартует без ожидания CA-проверки,
+        // проверка идёт в background (результат и UI-warning — в checkCa)
         val i = Intent(this, FilterService::class.java)
         i.putExtra("https", true)
         try {
@@ -384,11 +401,13 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             logClick("СЕРВИС НЕ ЗАПУСТИЛСЯ: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
         }
+        checkCa()
     }
 
     override fun onResume() {
         super.onResume()
         checkCa()
+        refreshCaTwinsLine()
         thread {
             val result = CaDiagnostics.inspect(this@MainActivity)
             prefs.edit().putString("ca_diagnostics", result).apply()
