@@ -74,6 +74,54 @@ class MainActivity : AppCompatActivity() {
         chkNoMitm.visibility = android.view.View.GONE
         findViewById<MaterialButton>(R.id.btnApps).setOnClickListener { pickExcludedApps() }
         findViewById<MaterialButton>(R.id.btnResetCa).setOnClickListener { resetCa() }
+        val btnToggle = findViewById<MaterialButton>(R.id.btnToggle)
+        // Universal V1: touch/click diagnostics для доказательства STOP origin.
+        // Слушатели ставятся ОДИН раз здесь, а не каждую секунду в updateUi().
+        btnToggle.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                    logClick("TOGGLE_TOUCH_DOWN " + t)
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                    logClick("TOGGLE_TOUCH_UP " + t)
+                }
+            }
+            false
+        }
+        btnToggle.setOnClickListener {
+            btnToggle.isEnabled = false
+            btnToggle.postDelayed({ btnToggle.isEnabled = true }, 800)
+            val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+            logClick("TOGGLE_CLICK " + t + " running=" + FilterService.isRunning)
+            if (FilterService.isRunning) {
+                saveStopToLog()
+                val si = Intent(this, FilterService::class.java)
+                si.action = "STOP"
+                val t2 = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
+                logClick("TOGGLE_STOP_SEND " + t2)
+                startService(si)
+                FilterService.isRunning = false
+                btnToggle.postDelayed({ updateUi() }, 400)
+                btnToggle.postDelayed({ updateUi() }, 1500)
+            } else {
+                logClick("ВКЛЮЧИТЬ нажато")
+                try {
+                    val i = VpnService.prepare(this)
+                    logClick("consent нужен=" + (i != null))
+                    if (i != null) {
+                        startActivityForResult(i, 42)
+                        logClick("диалог согласия показан")
+                    } else {
+                        startFilter()
+                        btnToggle.postDelayed({ updateUi() }, 500)
+                    }
+                } catch (e: Exception) {
+                    logClick("ОШИБКА клика: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
+                }
+            }
+        }
         val chkBr = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.chkBrowsers)
         chkBr.isChecked = true
         chkBr.visibility = android.view.View.GONE
@@ -251,8 +299,13 @@ class MainActivity : AppCompatActivity() {
 
     // 2.0.12: префиксы SHA-256 всех CA с тем же именем (диагностика
     // "других CA с тем же именем: 5" - чтобы отличить текущий от старых).
+    private var caTwinsCache = ""
+    private var caTwinsCacheAt = 0L
     private fun caTwinsLine(): String {
-        return try {
+        // не чаще раза в 60 секунд (UI thread защита)
+        val now = System.currentTimeMillis()
+        if (caTwinsCache.isNotEmpty() && now - caTwinsCacheAt < 60_000) return caTwinsCache
+        val line = try {
             val tf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
             tf.init(null as java.security.KeyStore?)
             val tm = tf.trustManagers[0] as X509TrustManager
@@ -269,6 +322,9 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             "SAME-NAME CA scan fail: " + (e.message ?: "?") + "\n"
         }
+        caTwinsCache = line
+        caTwinsCacheAt = now
+        return line
     }
 
     private fun saveStopToLog() {
@@ -392,12 +448,14 @@ class MainActivity : AppCompatActivity() {
         }
         // Universal V1 fix: generic counters из flowlog (Go пишет туда), не из log
         val flowTxt = prefs.getString("flowlog", "") ?: ""
+        // UI thread: считаем счётчики только по хвосту flowlog, не разбирая весь лог
+        val flowTail = flowTxt.lines().takeLast(40).joinToString("\n")
         val logTxt = prefs.getString("log", "") ?: ""
-        val gOK = flowTxt.lines().count { it.contains("GENERIC_MITM_OK") }
-        val gFail = flowTxt.lines().count { it.contains("GENERIC_MITM_FAIL") }
-        val gHTML = flowTxt.lines().count { it.contains("GENERIC_HTML_FILTERED") }
-        val gBypass = flowTxt.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
-        val gBlocked = flowTxt.lines().count { it.contains("GENERIC_BLOCKED") }
+        val gOK = flowTail.lines().count { it.contains("GENERIC_MITM_OK") }
+        val gFail = flowTail.lines().count { it.contains("GENERIC_MITM_FAIL") }
+        val gHTML = flowTail.lines().count { it.contains("GENERIC_HTML_FILTERED") }
+        val gBypass = flowTail.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
+        val gBlocked = flowTail.lines().count { it.contains("GENERIC_BLOCKED") }
         val rulesCount = logTxt.lines().count { it.contains("YANDEX_CB_RULES_READY") }
         val rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
         val genericStatus = "OK=" + gOK + " FAIL=" + gFail + " HTML=" + gHTML + " BYPASS=" + gBypass + " BLOCK=" + gBlocked
@@ -495,13 +553,15 @@ class MainActivity : AppCompatActivity() {
         // fix scroll: сохраняем scrollY, не присваиваем если текст совпадает
         val mainScroll = findViewById<android.widget.ScrollView>(R.id.mainScroll)
         val savedY = mainScroll?.scrollY ?: 0
+        // пока сервис работает: не вставляем весь flowlog — только последние 20 строк
+        val flTail = fl.lines().takeLast(20).joinToString("\n")
         val newErrText = when {
             running -> {
                 val base = if (prefs.getBoolean("https_mode", false)) "HTTPS-фильтрация работает" else "Фильтр работает"
                 // ВАЖНО: никаких прямых вызовов mitm.* здесь — только prefs.
                 // Прямой gomobile-вызов с главного потока блокирует UI,
                 // если движок подвис (кнопки "заедали" именно поэтому).
-                if (prefs.getBoolean("https_mode", false)) base + (if (vpna.isNotEmpty()) " (" + vpna + ")" else "") + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (fl.isNotEmpty()) "\n" + fl else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
+                if (prefs.getBoolean("https_mode", false)) base + (if (vpna.isNotEmpty()) " (" + vpna + ")" else "") + "\n" + lc + (if (pst.isNotEmpty()) "\n" + pst else "") + (if (st.isNotEmpty()) "\n" + st else "") + (if (flTail.isNotEmpty()) "\n" + flTail else "") + (if (eerr.isNotEmpty()) "\nERR: " + eerr else "")
                 else base
             }
             consentNeeded -> "Нужно разрешение системы — жми кнопку"
@@ -531,51 +591,5 @@ class MainActivity : AppCompatActivity() {
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
         if (modeline == "MODE=HEV_DNS_SNI") stats.text = "Тестовая 2.0 • статистика текущего запуска"
-        // Universal V1: touch/click diagnostics для доказательства STOP origin
-        btn.setOnTouchListener { v, ev ->
-            when (ev.action) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                    logClick("TOGGLE_TOUCH_DOWN " + t)
-                }
-                android.view.MotionEvent.ACTION_UP -> {
-                    val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                    logClick("TOGGLE_TOUCH_UP " + t)
-                }
-            }
-            false
-        }
-        btn.setOnClickListener {
-            btn.isEnabled = false
-            btn.postDelayed({ btn.isEnabled = true }, 800)
-            val t = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-            logClick("TOGGLE_CLICK " + t + " running=" + FilterService.isRunning)
-            if (FilterService.isRunning) {
-                saveStopToLog()
-                val si = Intent(this, FilterService::class.java)
-                si.action = "STOP"
-                val t2 = android.text.format.DateFormat.format("HH:mm:ss", java.util.Date())
-                logClick("TOGGLE_STOP_SEND " + t2)
-                startService(si)
-                FilterService.isRunning = false
-                btn.postDelayed({ updateUi() }, 400)
-                btn.postDelayed({ updateUi() }, 1500)
-            } else {
-                logClick("ВКЛЮЧИТЬ нажато")
-                try {
-                    val i = VpnService.prepare(this)
-                    logClick("consent нужен=" + (i != null))
-                    if (i != null) {
-                        startActivityForResult(i, 42)
-                        logClick("диалог согласия показан")
-                    } else {
-                        startFilter()
-                        btn.postDelayed({ updateUi() }, 500)
-                    }
-                } catch (e: Exception) {
-                    logClick("ОШИБКА клика: " + (e.message ?: "?") + " " + e.javaClass.simpleName)
-                }
-            }
-        }
     }
 }
