@@ -1714,6 +1714,23 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			return true, reqs > 0
 		}
 		reqs++
+		// COSMETIC_PROBE: служебный runtime-probe injected JS — в интернет НЕ отправляем,
+		// логируем и отвечаем 204.
+		if req.URL.Path == "/__cab_probe" {
+			flowLog("COSMETIC_PROBE " + req.URL.Query().Get("ev"))
+			resp := &http.Response{
+				Status:     "204 No Content",
+				StatusCode: 204,
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}
+			_ = resp.Write(tlsConn)
+			continue
+		}
 		// 5) Сетевой блокlist на уровне запроса (path-level)
 		// Блокlist: проверяем ДО изменения req.Host — реальный req.Host + SNI + path+query
 		pathQuery := req.URL.EscapedPath()
@@ -1920,6 +1937,13 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 	h2s := &http2.Server{}
 	h2srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// COSMETIC_PROBE: служебный runtime-probe injected JS — в интернет НЕ отправляем,
+			// логируем и отвечаем 204.
+			if r.URL.Path == "/__cab_probe" {
+				flowLog("COSMETIC_PROBE " + r.URL.Query().Get("ev"))
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			pathQuery := r.URL.EscapedPath()
 			if r.URL.RawQuery != "" {
 				pathQuery += "?" + r.URL.RawQuery

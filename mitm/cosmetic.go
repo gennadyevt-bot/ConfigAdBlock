@@ -93,6 +93,9 @@ function hideSel(root){
 	var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++)hide(els[i]);
 }
 function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
+// служебный runtime-probe: MITM перехватывает /__cab_probe, в интернет не уходит
+function probe(ev){try{fetch('/__cab_probe?ev='+ev,{cache:'no-store'}).catch(function(){});}catch(e){}}
+probe('start');
 function isAdSign(el){return el&&el.matches&&el.matches(SELS);}
 // рекламный маркер: точное совпадение ИЛИ начало "Реклама ·"/"Реклама "
 // (аналогично Advertisement / Sponsored). Точный MARKS.indexOf не требуем.
@@ -115,6 +118,7 @@ function findMark(root){
 	for(var i=0;i<all.length;i++){
 		var t=norm(all[i].textContent);
 		if(!isAdMark(t))continue;
+		probe('mark');
 		var el=all[i];
 		var best=null;
 		for(var up=0;up<6&&el.parentElement;up++){
