@@ -1783,7 +1783,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			return true, false
 		}
 		// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
-		if (req.Host == "yandex.ru" || req.Host == "ya.ru") && strings.HasPrefix(req.URL.Path, "/video/_crpd/") &&
+		if (req.Host == "yandex.ru" || req.Host == "ya.ru") && (strings.HasPrefix(req.URL.Path, "/video/_crpd/") || strings.HasPrefix(req.URL.Path, "/weather/_cry/")) &&
 			strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
 			resp.Header.Get("Content-Encoding") == "" {
 			jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
@@ -2063,7 +2063,7 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 			defer resp.Body.Close()
 			// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
 			// Остальные /video/_crpd/ не тронуты, body восстанавливается через MultiReader.
-			if (r.Host == "yandex.ru" || r.Host == "ya.ru") && strings.HasPrefix(r.URL.Path, "/video/_crpd/") &&
+			if (r.Host == "yandex.ru" || r.Host == "ya.ru") && (strings.HasPrefix(r.URL.Path, "/video/_crpd/") || strings.HasPrefix(r.URL.Path, "/weather/_cry/")) &&
 				strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
 				resp.Header.Get("Content-Encoding") == "" {
 				jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
