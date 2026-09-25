@@ -1783,13 +1783,16 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			return true, false
 		}
 		// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
-		if req.Host == "yandex.ru" && strings.HasPrefix(req.URL.Path, "/video/_crpd/") &&
+		if (req.Host == "yandex.ru" || req.Host == "ya.ru") && strings.HasPrefix(req.URL.Path, "/video/_crpd/") &&
 			strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
 			resp.Header.Get("Content-Encoding") == "" {
 			jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
 			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
-			if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
-				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery)
+			hits := adFingerprint(jbuf)
+			block := jerr == nil && len(jbuf) <= 256*1024 &&
+				(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
+			if block {
+				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery + " hits=" + strings.Join(hits, ","))
 				jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
 				blockResp := &http.Response{
 					Status:        "200 OK",
@@ -1975,6 +1978,15 @@ func adFingerprintCT(ct string) bool {
 		strings.Contains(ctl, "octet-stream")
 }
 
+func hitsContains(hits []string, name string) bool {
+	for _, h := range hits {
+		if h == name {
+			return true
+		}
+	}
+	return false
+}
+
 func adFingerprint(raw []byte) []string {
 	marks := []struct {
 		name   string
@@ -2052,13 +2064,16 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 			defer resp.Body.Close()
 			// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
 			// Остальные /video/_crpd/ не тронуты, body восстанавливается через MultiReader.
-			if r.Host == "yandex.ru" && strings.HasPrefix(r.URL.Path, "/video/_crpd/") &&
+			if (r.Host == "yandex.ru" || r.Host == "ya.ru") && strings.HasPrefix(r.URL.Path, "/video/_crpd/") &&
 				strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
 				resp.Header.Get("Content-Encoding") == "" {
 				jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
 				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
-				if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
-					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath())
+				hits := adFingerprint(jbuf)
+				block := jerr == nil && len(jbuf) <= 256*1024 &&
+					(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
+				if block {
+					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath() + " hits=" + strings.Join(hits, ","))
 					jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
 					w.Header().Set("Content-Type", "application/javascript")
 					w.Header().Set("Content-Length", strconv.Itoa(len(jsBlocked)))
