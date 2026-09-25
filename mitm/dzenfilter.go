@@ -1782,6 +1782,30 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			flowLog("GENERIC_MITM_FAIL read sni=" + sni + " err=" + err.Error())
 			return true, false
 		}
+		// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
+		if req.Host == "yandex.ru" && strings.HasPrefix(req.URL.Path, "/video/_crpd/") &&
+			strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
+			resp.Header.Get("Content-Encoding") == "" {
+			jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
+			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
+			if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
+				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery)
+				blockResp := &http.Response{
+					Status:        "200 OK",
+					StatusCode:    200,
+					Proto:         "HTTP/1.1",
+					ProtoMajor:    1,
+					ProtoMinor:    1,
+					Header:        make(http.Header),
+					Body:          io.NopCloser(strings.NewReader("")),
+					Request:       req,
+					ContentLength: 0,
+				}
+				blockResp.Header.Set("Content-Type", "application/javascript")
+				_ = blockResp.Write(tlsConn)
+				continue
+			}
+		}
 		// AD_FINGERPRINT: временный сканер (identity body). Только позитивы,
 		// body восстанавливается через MultiReader, ничего не блокируется.
 		if adFingerprintCT(resp.Header.Get("Content-Type")) && resp.Header.Get("Content-Encoding") == "" {
@@ -2025,6 +2049,21 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				return
 			}
 			defer resp.Body.Close()
+			// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
+			// Остальные /video/_crpd/ не тронуты, body восстанавливается через MultiReader.
+			if r.Host == "yandex.ru" && strings.HasPrefix(r.URL.Path, "/video/_crpd/") &&
+				strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
+				resp.Header.Get("Content-Encoding") == "" {
+				jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
+				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
+				if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
+					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath())
+					w.Header().Set("Content-Type", "application/javascript")
+					w.Header().Set("Content-Length", "0")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
 			// CRPD_BODY: одна диагностика тела для yandex.ru/video/_crpd/.
 			// Только text/plain/json, без gzip. Чтение через LimitReader (256KB+1).
 			// Если >256KB — не анализируем. Body в журнал НЕ выводится,
