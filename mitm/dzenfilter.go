@@ -1789,8 +1789,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
 			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
 			hits := adFingerprint(jbuf)
-			block := jerr == nil && len(jbuf) <= 256*1024 &&
-				(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
+			block := jerr == nil && len(jbuf) <= 256*1024 && len(hits) > 0
 			if block {
 				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery + " hits=" + strings.Join(hits, ","))
 				jsBlocked := `(function(){var s=document.currentScript;function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagName+' id='+(el.id||'-')+' class='+String(el.className||'-').slice(0,60)+' w='+Math.round(r.width)+' h='+Math.round(r.height);}if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));try{fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}})();`
@@ -2070,8 +2069,7 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				jbuf, jerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
 				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
 				hits := adFingerprint(jbuf)
-				block := jerr == nil && len(jbuf) <= 256*1024 &&
-					(hitsContains(hits, "last_asylum") || hitsContains(hits, "play") || hitsContains(hits, "cloud_walkers"))
+				block := jerr == nil && len(jbuf) <= 256*1024 && len(hits) > 0
 				if block {
 					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath() + " hits=" + strings.Join(hits, ","))
 					jsBlocked := `(function(){var s=document.currentScript;function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagName+' id='+(el.id||'-')+' class='+String(el.className||'-').slice(0,60)+' w='+Math.round(r.width)+' h='+Math.round(r.height);}if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));try{fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}})();`
