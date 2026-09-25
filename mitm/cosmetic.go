@@ -86,11 +86,39 @@ func buildCosmeticInject() []byte {
 var SELS='` + jsSel + `';
 var MARKS=['Реклама','Рекламное объявление','Advertisement','Sponsored'];
 function hide(el){if(!el||!el.style)return;el.style.display='none';el.style.height='0';el.style.overflow='hidden';}
+// ДИАГНОСТИКА (beta8): логируем, ЧТО именно скрывает существующая логика.
+// Без новых display:none. Максимум 20 логов за сессию.
+var genHideLogN=0;
+function ghDesc(el){
+	var r=el.getBoundingClientRect();
+	var cls=String(el.className||'');
+	if(cls.length>120)cls=cls.slice(0,120);
+	var out=el.tagName+(el.id?'#'+el.id:'')+' class='+cls+' rect='+Math.round(r.width)+'x'+Math.round(r.height)+' children='+(el.children?el.children.length:0)+' text='+((el.textContent||'').length);
+	try{
+		var role=el.getAttribute('role');if(role)out+=' role='+role;
+		var tid=el.getAttribute('data-testid');if(tid)out+=' testid='+tid;
+		var mk=el.getAttribute('data-marker');if(mk)out+=' marker='+mk;
+	}catch(_){}
+	return out;
+}
+function logHideChain(reason,el){
+	try{
+		if(genHideLogN>=20)return;
+		genHideLogN++;
+		var parts=['reason='+reason];
+		var cur=el,lvl=0;
+		while(cur&&lvl<5){
+			parts.push('l'+lvl+'='+ghDesc(cur));
+			cur=cur.parentElement;lvl++;
+		}
+		probe('GENERIC_HIDE_CHAIN '+parts.join(' | '));
+	}catch(_){}
+}
 function hideSel(root){
 	if(!root||!root.querySelectorAll)return;
 	// сам addedNode может matches(SELS)
-	if(root.nodeType===1&&root.matches&&root.matches(SELS))hide(root);
-	var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++)hide(els[i]);
+	if(root.nodeType===1&&root.matches&&root.matches(SELS)){hide(root);logHideChain('selector',root);}
+	var els=root.querySelectorAll(SELS);for(var i=0;i<els.length;i++){hide(els[i]);logHideChain('selector',els[i]);}
 }
 function norm(t){return (t||'').replace(/\s+/g,' ').trim();}
 // служебный runtime-probe: MITM перехватывает /__cab_probe, в интернет не уходит
@@ -134,7 +162,7 @@ function findMark(root){
 				break;
 			}
 		}
-		if(best)hide(best);
+		if(best){hide(best);logHideChain('mark',best);}
 	}
 }
 function scan(root){hideSel(root);findMark(root);}
