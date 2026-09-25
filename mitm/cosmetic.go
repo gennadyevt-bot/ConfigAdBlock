@@ -139,14 +139,17 @@ scan(document.documentElement);
 // дальше только addedNodes
 var obs=new MutationObserver(function(muts){
 	for(var m=0;m<muts.length;m++){
-		var nodes=muts[m].addedNodes;
+		var mu=muts[m];
+		if(mu.type==='attributes'){scan(mu.target);continue;}
+		if(mu.type==='characterData'){if(mu.target&&mu.target.parentElement)scan(mu.target.parentElement);continue;}
+		var nodes=mu.addedNodes;
 		if(!nodes)continue;
 		for(var n=0;n<nodes.length;n++){
 			scan(nodes[n]);
 		}
 	}
 });
-obs.observe(document.documentElement,{childList:true,subtree:true});
+obs.observe(document.documentElement,{childList:true,subtree:true,attributes:true,characterData:true});
 })();</script>`
 	inject := "<style>" + css + "{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important}</style>" + js
 	return []byte(inject)
