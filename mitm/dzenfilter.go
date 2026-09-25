@@ -1959,7 +1959,11 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				return
 			}
 			defer resp.Body.Close()
-			flowLog("GENERIC_H2_RESP host=" + r.Host + " path=" + pathQuery + " status=" + strconv.Itoa(resp.StatusCode) + " ct=" + resp.Header.Get("Content-Type") + " enc=" + resp.Header.Get("Content-Encoding") + " len=" + strconv.FormatInt(resp.ContentLength, 10))
+			pq := pathQuery
+			if len(pq) > 200 {
+				pq = pq[:200] + "..."
+			}
+			flowLog("GENERIC_H2_RESP host=" + r.Host + " path=" + pq + " status=" + strconv.Itoa(resp.StatusCode) + " ct=" + resp.Header.Get("Content-Type") + " enc=" + resp.Header.Get("Content-Encoding") + " len=" + strconv.FormatInt(resp.ContentLength, 10))
 			// headers
 			for k, vv := range resp.Header {
 				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") || strings.EqualFold(k, "Content-Length") {

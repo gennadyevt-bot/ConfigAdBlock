@@ -446,9 +446,16 @@ class MainActivity : AppCompatActivity() {
             running -> "● работает"
             else -> "○ выключен"
         }
-        // Universal V1 fix: generic counters из flowlog (Go пишет туда), не из log
+        // п.1/п.2/п.4: тяжёлая диагностика и любой разбор flowlog — ТОЛЬКО когда
+        // открыт раздел "Статистика и журнал" или сервис остановлен.
+        // Пока RUNNING с закрытым разделом: кнопка, state, короткий stateHint.
+        val statsOpen = try { findViewById<View>(R.id.statsContent).visibility == View.VISIBLE } catch (e: Exception) { false }
+        val showDiag = !running || statsOpen
+        var genericStatus = ""
+        var rulesN = ""
+        if (showDiag) {
+        // counters по хвосту flowlog
         val flowTxt = prefs.getString("flowlog", "") ?: ""
-        // UI thread: считаем счётчики только по хвосту flowlog, не разбирая весь лог
         val flowTail = flowTxt.lines().takeLast(40).joinToString("\n")
         val logTxt = prefs.getString("log", "") ?: ""
         val gOK = flowTail.lines().count { it.contains("GENERIC_MITM_OK") }
@@ -457,17 +464,19 @@ class MainActivity : AppCompatActivity() {
         val gBypass = flowTail.lines().count { it.contains("GENERIC_DIRECT_BYPASS") }
         val gBlocked = flowTail.lines().count { it.contains("GENERIC_BLOCKED") }
         val rulesCount = logTxt.lines().count { it.contains("YANDEX_CB_RULES_READY") }
-        val rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
-        val genericStatus = "OK=" + gOK + " FAIL=" + gFail + " HTML=" + gHTML + " BYPASS=" + gBypass + " BLOCK=" + gBlocked
+        rulesN = if (rulesCount > 0) "Правил: ~49 000" else "Правил: —"
+        genericStatus = "OK=" + gOK + " FAIL=" + gFail + " HTML=" + gHTML + " BYPASS=" + gBypass + " BLOCK=" + gBlocked
+        }
         stateHint.text = when {
             running && caReject -> "HTTPS-реклама сейчас не блокируется. Переустановите сертификат (кнопка в настройках)."
             running && caMissing -> "Установите сертификат Config AdBlock — без него HTTPS-реклама не блокируется."
-            running -> "Сетевой фильтр: ● работает\nЯндекс.Браузер: " + cbStatus + "\nHTTPS-фильтр: " + httpsStatus + "\nGeneric MITM: " + genericStatus + "\n" + rulesN
+            running -> "Сетевой фильтр: ● работает\nЯндекс.Браузер: " + cbStatus + "\nHTTPS-фильтр: " + httpsStatus + (if (genericStatus.isNotEmpty()) "\nGeneric MITM: " + genericStatus + "\n" + rulesN else "")
             consentNeeded -> "Android попросит подтвердить подключение"
             else -> "Нажмите кнопку, чтобы убрать рекламу"
         }
         btn.backgroundTintList = ColorStateList.valueOf(getColor(if (running) R.color.green_active_button else R.color.white_bg))
         btn.setTextColor(getColor(R.color.green_primary))
+        if (showDiag) {
         // Журнал: пока сервис жив — текущий поток FlowLog; после STOP —
         // сохранённый снапшот последней сессии (GPT: лог не должен
         // исчезать раньше анализа).
@@ -591,5 +600,6 @@ class MainActivity : AppCompatActivity() {
         err.textSize = if (running || consentNeeded) 13f else 11f
         stats.text = "Всего запросов: " + prefs.getInt("total", 0) + "\nЗаблокировано: " + prefs.getInt("blocked", 0) + "\nПропущено: " + prefs.getInt("allowed", 0)
         if (modeline == "MODE=HEV_DNS_SNI") stats.text = "Тестовая 2.0 • статистика текущего запуска"
+        }
     }
 }
