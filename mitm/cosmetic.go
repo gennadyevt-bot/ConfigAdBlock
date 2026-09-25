@@ -141,38 +141,6 @@ function scan(root){hideSel(root);findMark(root);}
 // один полный проход при старте
 scan(document.documentElement);
 // дальше только addedNodes
-// GENERIC early hide: контейнер, содержащий script/iframe/img с src из
-// ПОДТВЕРЖДЁННЫХ рекламных payload-путей (/_crpd/ или /_cry/). Точная сигнатура,
-// привязана к тем же путям, что блокирует AD_PAYLOAD_BLOCK. Без broad-селекторов.
-// Синхронно на addedNodes, до отрисовки. Окончательная очистка scan() сохранена.
-var ADPAY=/\/video\/_crpd\/|\/weather\/_cry\//;
-function earlyHideGeneric(root){
-	try{
-		if(!root||root.nodeType!==1||!root.querySelectorAll)return;
-		var bad=[];
-		try{if(root.src&&ADPAY.test(root.src))bad.push(root);}catch(_){}
-		try{
-			var all=root.querySelectorAll('script[src],iframe[src],img[src]');
-			for(var i=0;i<all.length;i++){
-				if(ADPAY.test(all[i].getAttribute('src')||''))bad.push(all[i]);
-			}
-		}catch(_){}
-		for(var k=0;k<bad.length;k++){
-			var el=bad[k].parentElement,hops=0;
-			while(el&&hops<5){
-				var r=el.getBoundingClientRect();
-				if(r.width>=200&&r.height>=90)break;
-				el=el.parentElement;hops++;
-			}
-			var tgt=el||bad[k].parentElement;
-			if(tgt&&!tgt.__genEarlyHide){
-				tgt.__genEarlyHide=1;
-				tgt.style.display='none';tgt.style.visibility='hidden';tgt.style.height='0';tgt.style.overflow='hidden';
-				probe('GENERIC_COSMETIC_EARLY_HIDE reason=blocked_payload selector=src_crpd_cry tag='+tgt.tagName+' id='+(tgt.id||'-'));
-			}
-		}
-	}catch(_){}
-}
 var obs=new MutationObserver(function(muts){
 	for(var m=0;m<muts.length;m++){
 		var mu=muts[m];
@@ -181,7 +149,7 @@ var obs=new MutationObserver(function(muts){
 		var nodes=mu.addedNodes;
 		if(!nodes)continue;
 		for(var n=0;n<nodes.length;n++){
-			earlyHideGeneric(nodes[n]);scan(nodes[n]);
+			scan(nodes[n]);
 		}
 	}
 });
