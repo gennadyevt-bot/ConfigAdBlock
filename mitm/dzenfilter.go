@@ -1790,6 +1790,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
 			if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
 				flowLog("AD_PAYLOAD_BLOCK host=" + req.Host + " path=" + pathQuery)
+				jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
 				blockResp := &http.Response{
 					Status:        "200 OK",
 					StatusCode:    200,
@@ -1797,9 +1798,9 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 					ProtoMajor:    1,
 					ProtoMinor:    1,
 					Header:        make(http.Header),
-					Body:          io.NopCloser(strings.NewReader("")),
+					Body:          io.NopCloser(strings.NewReader(jsBlocked)),
 					Request:       req,
-					ContentLength: 0,
+					ContentLength: int64(len(jsBlocked)),
 				}
 				blockResp.Header.Set("Content-Type", "application/javascript")
 				_ = blockResp.Write(tlsConn)
@@ -2058,9 +2059,11 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(jbuf), resp.Body))
 				if jerr == nil && len(jbuf) <= 256*1024 && bytes.Contains(jbuf, []byte("play.google.com")) {
 					flowLog("AD_PAYLOAD_BLOCK host=" + r.Host + " path=" + r.URL.EscapedPath())
+					jsBlocked := "window.dispatchEvent(new Event('__cab_ad_blocked'));"
 					w.Header().Set("Content-Type", "application/javascript")
-					w.Header().Set("Content-Length", "0")
+					w.Header().Set("Content-Length", strconv.Itoa(len(jsBlocked)))
 					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(jsBlocked))
 					return
 				}
 			}
