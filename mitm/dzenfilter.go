@@ -1918,6 +1918,14 @@ func shouldGenericH2(negotiatedProto string) bool {
 func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 	flowLog("GENERIC_H2_REQ sni=" + sni)
 	h2s := &http2.Server{}
+	// п.1: ОДИН transport на всё H2-соединение, переиспользуется всеми request'ами.
+	// dialTCP/protected socket без изменений; ServerName = sni (уровень соединения).
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialTCP(addr)
+		},
+	}
 	h2srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pathQuery := r.URL.EscapedPath()
@@ -1946,12 +1954,6 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 			upReq.Header.Del("Connection")
 			upReq.Header.Del("Upgrade")
 			upReq.Header.Del("HTTP2-Settings")
-			transport := &http.Transport{
-				TLSClientConfig: &tls.Config{ServerName: r.Host, MinVersion: tls.VersionTLS12},
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialTCP(addr)
-				},
-			}
 			resp, err := transport.RoundTrip(upReq)
 			if err != nil {
 				flowLog("GENERIC_H2_FAIL upstream host=" + r.Host + " err=" + err.Error())
@@ -1982,6 +1984,12 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				}
 				enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
 				mod, changed := filterHTMLBody(raw, enc)
+				// п.2: точечный факт по исходному HTML (до модификации body). Без body dump.
+				if r.Host == "yandex.ru" || strings.HasSuffix(r.Host, ".yandex.ru") {
+					flowLog("YANDEX_HTML_FILTER changed=" + strconv.FormatBool(changed) +
+						" has_reklama=" + strconv.FormatBool(bytes.Contains(raw, []byte("Реклама"))) +
+						" has_direct=" + strconv.FormatBool(bytes.Contains(raw, []byte("Яндекс.Директ"))))
+				}
 				if changed {
 					// CSP headers уже скопированы в w.Header() — удаляем их там
 					w.Header().Del("Content-Security-Policy")
