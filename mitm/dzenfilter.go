@@ -193,7 +193,7 @@ function beacon(data){
   try{ if(navigator.sendBeacon && navigator.sendBeacon('/__configadblock_diag?d='+encodeURIComponent(data),new Blob([]))) return; }catch(_){}
   try{ fetch('/__configadblock_diag?d='+encodeURIComponent(data),{method:'GET',cache:'no-store',credentials:'omit'}).catch(function(){}); }catch(_){}
 }
-function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0&&sig.indexOf('APP_WRAPPER_CANDIDATE')<0&&sig.indexOf('APP_INNER_FALLBACK')<0&&sig.indexOf('ORPHAN_MEDIA_CLEANED')<0)return;diagSent++;beacon(sig);}
+function sendDiag(sig){if(!sig||sig.length>1000)return;if(diagSent>=8&&sig.indexOf('COSMETIC_EARLY_HIDE')<0&&sig.indexOf('CAROUSEL_CANDIDATE')<0&&sig.indexOf('CAROUSEL_AD_FOUND')<0&&sig.indexOf('DISCLOSURE_CANDIDATE')<0&&sig.indexOf('AD_DISCLOSURE_FOUND')<0&&sig.indexOf('FEED_AD_RULE_MATCH')<0&&sig.indexOf('FEED_PROBE')<0&&sig.indexOf('FEED_CAROUSEL_MARKER')<0&&sig.indexOf('APP_WRAPPER_CANDIDATE')<0&&sig.indexOf('APP_INNER_FALLBACK')<0&&sig.indexOf('ORPHAN_MEDIA_CLEANED')<0)return;diagSent++;beacon(sig);}
 function sendIframe(host){if(iframeSent>=10||!host||host.length>80||iframeSeen[host])return;iframeSeen[host]=1;iframeSent++;beacon('IFRAME host='+host);}
 function marker(e){beacon(e);}
 function norm(s){return (s||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
@@ -671,9 +671,41 @@ function scanFeedAds(root){
     }
   }catch(_){}
 }
+// EARLY_HIDE: синхронное раннее скрытие ПОДТВЕРЖДЁННЫХ рекламных wrapper
+// ДО тяжёлого scan/geometry. Дешёвые сигнатуры (тот же disclosure-комбо и тот же
+// FEEDAD-селектор, что в scanFeedAds). Без geometry, без setTimeout.
+// Окончательный remove в scan* никуда не девается.
+function earlyHide(root){
+  try{
+    if(!root||root.nodeType!==1||!root.querySelectorAll)return;
+    var t='';
+    try{t=(root.textContent||'');}catch(_){}
+    if(t.indexOf('Рекламное объявление')>=0&&t.indexOf('Скрыть объявление')>=0&&t.indexOf('Пожаловаться')>=0){
+      if(!root.__earlyHide){
+        root.__earlyHide=1;
+        root.style.display='none';root.style.visibility='hidden';root.style.height='0';root.style.overflow='hidden';
+        sendDiag('COSMETIC_EARLY_HIDE reason=disclosure_combo');
+      }
+      return;
+    }
+    var cands=[];
+    try{if(root.matches&&root.matches(FEEDAD))cands.push(root);}catch(_){}
+    try{var all=root.querySelectorAll(FEEDAD);for(var i=0;i<all.length;i++)cands.push(all[i]);}catch(_){}
+    var hid=0;
+    for(var k=0;k<cands.length;k++){
+      var a=cands[k];
+      if(!a||!a.isConnected||a.__earlyHide)continue;
+      a.__earlyHide=1;
+      a.style.display='none';a.style.visibility='hidden';a.style.height='0';a.style.overflow='hidden';
+      hid++;
+    }
+    if(hid)sendDiag('COSMETIC_EARLY_HIDE reason=feedad n='+hid);
+  }catch(_){}
+}
 function scan(root){
   try{
     if(root.nodeType===3){var v=norm(root.nodeValue);if(ADD.test(v))handleDisclosure(root.parentElement,v);else if(ADL.test(v))handleMarker(root.parentElement,v);return;}
+    earlyHide(root);
     scanText(root);comboDisclosure(root);scanFeedAds(root);rmSel(root);emptyAdWrap(root);scanIframes(root);scanShadows(root);
   }catch(_){}
 }
@@ -696,7 +728,7 @@ scan(document);feedProbe();
 new MutationObserver(function(ms){
   ms.forEach(function(m){
     if(!m.addedNodes)return;
-    m.addedNodes.forEach(function(nd){scan(nd);comboDisclosure(nd);});
+    m.addedNodes.forEach(function(nd){if(nd.nodeType===1)earlyHide(nd);scan(nd);comboDisclosure(nd);});
   });
 }).observe(document.documentElement,{childList:true,subtree:true});
 })();`
