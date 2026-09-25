@@ -1960,22 +1960,29 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 			}
 			defer resp.Body.Close()
 			// CRPD_BODY: одна диагностика тела для yandex.ru/video/_crpd/.
-			// Только text/plain/json, разумный размер, без gzip. Body в журнал НЕ выводится,
-			// ничего не блокируется и не модифицируется (тело восстанавливается).
+			// Только text/plain/json, без gzip. Чтение через LimitReader (256KB+1).
+			// Если >256KB — не анализируем. Body в журнал НЕ выводится,
+			// ничего не блокируется; resp.Body обязательно восстанавливается.
 			if r.Host == "yandex.ru" && strings.HasPrefix(r.URL.Path, "/video/_crpd/") {
 				ct := resp.Header.Get("Content-Type")
-				if (strings.Contains(ct, "text/plain") || strings.Contains(ct, "json")) && resp.Header.Get("Content-Encoding") == "" && resp.ContentLength >= 0 && resp.ContentLength <= 256*1024 {
-					raw, rerr := io.ReadAll(resp.Body)
+				if (strings.Contains(ct, "text/plain") || strings.Contains(ct, "json")) && resp.Header.Get("Content-Encoding") == "" {
+					buf, rerr := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
+					resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), resp.Body))
 					if rerr == nil {
-						resp.Body = io.NopCloser(bytes.NewReader(raw))
-						has := func(x string) bool { return bytes.Contains(raw, []byte(x)) }
-						flowLog("CRPD_BODY reklama=" + strconv.FormatBool(has("Реклама")) +
-							" direct=" + strconv.FormatBool(has("Яндекс.Директ")) +
-							" play=" + strconv.FormatBool(has("play.google.com")) +
-							" asylum=" + strconv.FormatBool(has("Last Asylum")) +
-							" advert=" + strconv.FormatBool(has("advert")) +
-							" direct_str=" + strconv.FormatBool(has("direct")) +
-							" banner=" + strconv.FormatBool(has("banner")))
+						n := len(buf)
+						if n > 256*1024 {
+							flowLog("CRPD_BODY len=" + strconv.Itoa(n) + " skipped=big")
+						} else {
+							has := func(x string) bool { return bytes.Contains(buf, []byte(x)) }
+							flowLog("CRPD_BODY reklama=" + strconv.FormatBool(has("Реклама")) +
+								" direct=" + strconv.FormatBool(has("Яндекс.Директ")) +
+								" play=" + strconv.FormatBool(has("play.google.com")) +
+								" asylum=" + strconv.FormatBool(has("Last Asylum")) +
+								" advert=" + strconv.FormatBool(has("advert")) +
+								" direct_str=" + strconv.FormatBool(has("direct")) +
+								" banner=" + strconv.FormatBool(has("banner")) +
+								" len=" + strconv.Itoa(n))
+						}
 					}
 				}
 			}
