@@ -1782,6 +1782,17 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			flowLog("GENERIC_MITM_FAIL read sni=" + sni + " err=" + err.Error())
 			return true, false
 		}
+		// AD_FINGERPRINT: временный сканер (identity body). Только позитивы,
+		// body восстанавливается через MultiReader, ничего не блокируется.
+		if adFingerprintCT(resp.Header.Get("Content-Type")) && resp.Header.Get("Content-Encoding") == "" {
+			buf, ferr := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+			resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), resp.Body))
+			if ferr == nil && len(buf) <= 1024*1024 {
+				if hits := adFingerprint(buf); len(hits) > 0 {
+					flowLog("AD_FINGERPRINT host=" + req.Host + " path=" + pathQuery + " ct=" + resp.Header.Get("Content-Type") + " hits=" + strings.Join(hits, ","))
+				}
+			}
+		}
 		// 8) HTML -> filterHTML
 		if isHTML(resp) {
 			atomic.AddInt64(&genericHTMLFilteredN, 1)
@@ -1928,6 +1939,37 @@ func shouldGenericH2(negotiatedProto string) bool {
 	return negotiatedProto == "h2"
 }
 
+// AD_FINGERPRINT (временный сканер): маркеры и CT-фильтр.
+// Только позитивные совпадения, без body dump, без блокировок.
+func adFingerprintCT(ct string) bool {
+	ctl := strings.ToLower(ct)
+	return strings.Contains(ctl, "text/html") ||
+		strings.Contains(ctl, "json") ||
+		strings.Contains(ctl, "javascript") ||
+		strings.Contains(ctl, "protobuf") ||
+		strings.Contains(ctl, "octet-stream")
+}
+
+func adFingerprint(raw []byte) []string {
+	marks := []struct {
+		name   string
+		needle string
+	}{
+		{"last_asylum", "Last Asylum"},
+		{"play", "play.google.com"},
+		{"cloud_walkers", "CLOUD WALKERS"},
+		{"reklama", "Реклама"},
+		{"direct", "Яндекс.Директ"},
+	}
+	var hits []string
+	for _, m := range marks {
+		if bytes.Contains(raw, []byte(m.needle)) {
+			hits = append(hits, m.name)
+		}
+	}
+	return hits
+}
+
 // handleGenericH2 - HTTP/2 handler для generic MITM.
 // Принимает h2 от клиента, upstream остаётся HTTP/1.1.
 // Для каждого запроса: checkURL(host,path+query) -> BLOCK или upstream -> filterHTML если HTML.
@@ -2015,6 +2057,16 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 				pq = pq[:200] + "..."
 			}
 			flowLog("GENERIC_H2_RESP host=" + r.Host + " path=" + pq + " status=" + strconv.Itoa(resp.StatusCode) + " ct=" + resp.Header.Get("Content-Type") + " enc=" + resp.Header.Get("Content-Encoding") + " len=" + strconv.FormatInt(resp.ContentLength, 10))
+			// AD_FINGERPRINT: временный сканер. Только позитивы, body восстанавливается.
+			if resp.Header.Get("Content-Encoding") == "" && adFingerprintCT(resp.Header.Get("Content-Type")) {
+				buf, ferr := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), resp.Body))
+				if ferr == nil && len(buf) <= 1024*1024 {
+					if hits := adFingerprint(buf); len(hits) > 0 {
+						flowLog("AD_FINGERPRINT host=" + r.Host + " path=" + pq + " ct=" + resp.Header.Get("Content-Type") + " hits=" + strings.Join(hits, ","))
+					}
+				}
+			}
 			// headers
 			for k, vv := range resp.Header {
 				if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Upgrade") || strings.EqualFold(k, "Content-Length") {
